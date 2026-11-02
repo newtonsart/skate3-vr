@@ -9,6 +9,9 @@
 /game/
 *.iso
 *.xex
+*.xexp
+TU_*
+__pycache__/
 
 # Local runtime/config overrides
 skate3.toml
