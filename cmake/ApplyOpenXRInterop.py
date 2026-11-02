@@ -121,6 +121,22 @@ nrhi::Device* CreateNativeRhiDevice(VulkanCommandProcessor* command_processor) {
     edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
          "void NrCmdVulkan::ResetFrameState() {\n  layout_ = nullptr;",
          "void NrCmdVulkan::ResetFrameState() {\n  index_capacity_ = 0;\n  layout_ = nullptr;")
+    edit("include/rex/graphics/vulkan/native_rhi_vulkan.h",
+         "void NativeRhiEndFrame(nrhi::Device* device);",
+         "void NativeRhiEndFrame(nrhi::Device* device);\n"
+         "void NativeRhiTimestamp(nrhi::Device* device, VkQueryPool pool, uint32_t index, bool begin);")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         "void NativeRhiEndFrame(nrhi::Device* device) {",
+         """void NativeRhiTimestamp(nrhi::Device* device, VkQueryPool pool, uint32_t index, bool begin) {
+  auto* d = static_cast<NrDeviceVulkan*>(device);
+  d->EndFrame();
+  auto& cmd = d->cp()->deferred_command_buffer();
+  if (begin) cmd.CmdVkResetQueryPool(pool, index, 2);
+  cmd.CmdVkWriteTimestamp(begin ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                          pool, index);
+}
+
+void NativeRhiEndFrame(nrhi::Device* device) {""")
     edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
          "void NrCmdVulkan::DrawIndexed(uint32_t index_count, uint32_t start_index, int32_t base_vertex) {\n  if (!EnsureDrawState()) return;",
          """void NrCmdVulkan::DrawIndexed(uint32_t index_count, uint32_t start_index, int32_t base_vertex) {

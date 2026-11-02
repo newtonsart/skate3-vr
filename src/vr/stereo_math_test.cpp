@@ -1,11 +1,17 @@
 #include "stereo_math.h"
 #include "cull_frustum.h"
+#include "gpu_timing.h"
 #include <limits>
 #include <cmath>
 #include <stdexcept>
 
 void Check(bool condition) { if(!condition) throw std::runtime_error("Stereo matrix check failed"); }
 int main() {
+  Check(std::abs(skate3::vr::GpuDurationMs(100,1100,64,1000)-1.0)<1e-9);
+  Check(std::abs(skate3::vr::GpuDurationMs(250,4,8,100000)-1.0)<1e-9);
+  Check(skate3::vr::GpuDurationMs(0,1,0,1)<0);
+  Check(skate3::vr::GpuDurationMs(0,1,65,1)<0);
+  Check(skate3::vr::GpuDurationMs(0,1,64,-1)<0);
   const float p[16]={-1,0,0,0,0,1,0,0,0,0,1.001f,1,0,0,-0.1001f,0};
   float camera[3]={0,0,0},vp[16],projection[16],position[3];
   XrPosef reference{{0,0,0,1},{0,0,0}};

@@ -7,6 +7,7 @@ distributed. Build notes: [PCVR_BUILD.md](PCVR_BUILD.md).
 
 First playable checkpoint: **PCVR v0.1.0-alpha** (2026-11-02).
 Verified behavior and remaining tests: [PCVR_V0_1_CHECKPOINT.md](PCVR_V0_1_CHECKPOINT.md).
+Subsequent opt-in performance experiment: [PCVR_PERFORMANCE.md](PCVR_PERFORMANCE.md).
 
 ## Target
 Meta Quest 3 connected to a Windows PC (RTX 4080); standard Xbox/PlayStation
@@ -142,3 +143,17 @@ https://github.com/mchughalex/rexglue-skate3/pull/18.
   No isolated ASW-causality claim is made.
 
 Original project's history and credits are retained.
+
+## Frame-work performance experiment (2026-11-02)
+
+- Added optional per-eye GPU timestamps, sharing of the scene copy and
+  light-space shadow passes, and an alternating 600-sample comparison.
+- With the headset unavailable for wearing, measured actual GPU work using
+  two identical desktop-camera renders. The run without Vulkan validation
+  measured 3.736 -> 3.240 ms CPU render work (13.3%) and 1.756 -> 1.702 ms GPU
+  render work (3.0%), with balanced scene-item counts across variants.
+- The validation-enabled run completed 600 samples without VUID messages;
+  stereo/culling/timestamp tests and SDK patch tests pass.
+- `skate3_vr_share_frame_work` remains off by default. Headset visual checks
+  and full frame-rate/latency measurements remain pending; no VR FPS gain is
+  claimed from the desktop workload.

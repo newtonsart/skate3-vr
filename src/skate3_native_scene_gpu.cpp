@@ -7647,11 +7647,18 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
     static_cast<skate3::vr::EyeCamera*>(user_data)->override_camera = false;
   if (auto* eye = static_cast<skate3::vr::EyeCamera*>(user_data);
       eye && eye->override_camera && !loading_native) {
-    eye_scene = *eye->scene;
-    std::memcpy(eye_scene.view_proj, eye->view_proj, sizeof(eye_scene.view_proj));
-    std::memcpy(eye_scene.proj, eye->proj, sizeof(eye_scene.proj));
-    std::memcpy(eye_scene.cam_pos, eye->position, sizeof(eye_scene.cam_pos));
-    scene_ptr = std::shared_ptr<const FrameScene>(&eye_scene, [](const FrameScene*) {});
+    const auto copy_start=PerfClock::now();
+    FrameScene* camera_scene=eye->render_scene.get();
+    if (!camera_scene) {
+      eye_scene = *eye->scene;
+      camera_scene=&eye_scene;
+    }
+    eye->scene_copy_ms=std::chrono::duration<double,std::milli>(PerfClock::now()-copy_start).count();
+    std::memcpy(camera_scene->view_proj, eye->view_proj, sizeof(camera_scene->view_proj));
+    std::memcpy(camera_scene->proj, eye->proj, sizeof(camera_scene->proj));
+    std::memcpy(camera_scene->cam_pos, eye->position, sizeof(camera_scene->cam_pos));
+    scene_ptr = eye->render_scene ? eye->render_scene :
+        std::shared_ptr<const FrameScene>(&eye_scene, [](const FrameScene*) {});
   }
 #endif
   const FrameScene& scene = *scene_ptr;
@@ -7868,11 +7875,27 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   const auto shadow_t0 = PerfClock::now();
   const float* sh = scene.shadow_rows;
   const int32_t debug_mode = REXCVAR_GET(skate3_native_render_scene_debug);
-  cmd->ProfileRegion(nrhi::ProfileStage::kShadow);
-  shadow_ready =
-      RenderShadowAtlas(context, scene, bone_region, debug_mode, &shadow_draws);
-  cmd->ProfileRegion(nrhi::ProfileStage::kStaticSun);
-  RenderStaticSunMap(context, scene, bone_region, debug_mode, frame_number);
+  bool reuse_shadows=false;
+  const FrameScene* shadow_scene=&scene;
+#if SKATE3_HAS_OPENXR
+  auto* vr_eye=static_cast<skate3::vr::EyeCamera*>(user_data);
+  if (vr_eye && vr_eye->override_camera && vr_eye->shadows) {
+    shadow_scene=vr_eye->scene.get();
+    reuse_shadows=second_vr_eye && vr_eye->shadows->built;
+    if (reuse_shadows) shadow_ready=vr_eye->shadows->ready;
+  }
+#endif
+  if (!reuse_shadows) {
+    cmd->ProfileRegion(nrhi::ProfileStage::kShadow);
+    shadow_ready =
+        RenderShadowAtlas(context, *shadow_scene, bone_region, debug_mode, &shadow_draws);
+    cmd->ProfileRegion(nrhi::ProfileStage::kStaticSun);
+    RenderStaticSunMap(context, *shadow_scene, bone_region, debug_mode, frame_number);
+#if SKATE3_HAS_OPENXR
+    if (vr_eye && vr_eye->override_camera && vr_eye->shadows)
+      *vr_eye->shadows={true,shadow_ready};
+#endif
+  }
   g_pw_shadow.Add(perf_ns_since(shadow_t0));
   cmd->ProfileRegion(nrhi::ProfileStage::kMain);
   // Scene-level flicker probe: the shadow cascade rows (or validity/readiness)
