@@ -1,5 +1,4 @@
 [submodule "third_party/rexglue-sdk"]
 	path = third_party/rexglue-sdk
-	url = https://github.com/mchughalex/rexglue-skate3.git
-	branch = skate3-sdk-clean
+	url = https://github.com/drewsipher/rexglue-skate3.git
 
