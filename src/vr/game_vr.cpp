@@ -39,7 +39,7 @@ REXCVAR_DEFINE_DOUBLE(skate3_vr_hud_width, 1.6, "VR", "Readable HUD panel width 
 REXCVAR_DEFINE_DOUBLE(skate3_vr_hud_distance, 2.0, "VR", "HUD convergence distance in meters").range(0.5,5.0);
 REXCVAR_DEFINE_BOOL(skate3_vr_linear_color, true, "VR", "Decode display color before OpenXR composition");
 REXCVAR_DEFINE_BOOL(skate3_vr_expand_game_frustum, true, "VR", "Expand the matched main-camera culling planes for head turns");
-REXCVAR_DEFINE_BOOL(skate3_vr_share_frame_work, false, "VR", "Share the scene copy and light-space shadows between eyes (headset validation pending)");
+REXCVAR_DEFINE_BOOL(skate3_vr_share_frame_work, true, "VR", "Share the scene copy and light-space shadows between eyes");
 REXCVAR_DEFINE_BOOL(skate3_vr_gpu_timing, false, "VR", "Measure GPU render and transfer times per eye")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(skate3_vr_compare_frame_work, false, "VR", "Log 600 alternating separate/shared-work samples; desktop camera if XR is inactive")

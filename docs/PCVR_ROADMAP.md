@@ -7,7 +7,7 @@ distributed. Build notes: [PCVR_BUILD.md](PCVR_BUILD.md).
 
 First playable checkpoint: **PCVR v0.1.0-alpha** (2026-11-02).
 Verified behavior and remaining tests: [PCVR_V0_1_CHECKPOINT.md](PCVR_V0_1_CHECKPOINT.md).
-Subsequent opt-in performance experiment: [PCVR_PERFORMANCE.md](PCVR_PERFORMANCE.md).
+Subsequent performance improvements and measurements: [PCVR_PERFORMANCE.md](PCVR_PERFORMANCE.md).
 
 ## Target
 Meta Quest 3 connected to a Windows PC (RTX 4080); standard Xbox/PlayStation
@@ -144,7 +144,7 @@ https://github.com/mchughalex/rexglue-skate3/pull/18.
 
 Original project's history and credits are retained.
 
-## Frame-work performance experiment (2026-11-02)
+## Shared frame-work performance improvements (2026-11-02)
 
 - Added optional per-eye GPU timestamps, sharing of the scene copy and
   light-space shadow passes, and an alternating 600-sample comparison.
@@ -154,6 +154,15 @@ Original project's history and credits are retained.
   render work (3.0%), with balanced scene-item counts across variants.
 - The validation-enabled run completed 600 samples without VUID messages;
   stereo/culling/timestamp tests and SDK patch tests pass.
-- `skate3_vr_share_frame_work` remains off by default. Headset visual checks
-  and full frame-rate/latency measurements remain pending; no VR FPS gain is
-  claimed from the desktop workload.
+- The user then confirmed that the optimized path worked very well in the
+  headset. Their session exceeded 18,000 stereo submissions without submission
+  failures. An automated 600-sample OpenXR comparison and scripted pause/back
+  sequence passed with no Vulkan VUID messages or submission failures.
+- `skate3_vr_share_frame_work` now defaults on. Full frame-rate/latency and
+  broader movement/map coverage remain pending; no VR FPS gain is claimed
+  from partial rendering intervals or the desktop workload.
+- In the connected-headset validation comparison, CPU recording measured
+  4.257 -> 3.772 ms and GPU native rendering 1.535 -> 1.471 ms per pair.
+  The following no-validation run used the desktop fallback because the
+  headset became non-renderable. Its measurements are labelled separately;
+  the attempted scripted map change remains unconfirmed.

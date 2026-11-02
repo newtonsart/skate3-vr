@@ -1,4 +1,4 @@
-# PCVR frame-work optimization experiment
+# PCVR shared frame-work optimization
 
 2026-11-02, RTX 4080, Windows RelWithDebInfo Vulkan build.
 
@@ -15,8 +15,10 @@ view-dependent geometry, projection and HUD are still rendered separately.
 The context is local to one stereo pair, so it cannot reuse a previous frame's
 shadow readiness after a load or a skipped first-eye shadow pass.
 
-The optimization **defaults off pending headset validation**. GPU timing and
-automatic comparison also default off. The `vr-v0.1.0-alpha` tag is unchanged.
+The optimization now **defaults on following the user's positive headset test
+and the automated headset checks below**. GPU timing and automatic comparison
+remain off by default. `--skate3_vr_share_frame_work=false` restores the separate
+paths for troubleshooting. The `vr-v0.1.0-alpha` tag is unchanged.
 
 ## Measurements
 
@@ -77,13 +79,45 @@ compares duplicate game-camera views without submitting them to the headset.
 After 600 valid samples, comparison stops. The isolated local test used the
 project's existing `--skate3_demo_path=true` boot automation.
 
-For a later headset check, enable:
+To explicitly enable the optimized path:
 
 ```text
 --skate3_vr_share_frame_work=true
 ```
 
-Still required: stereo shadow appearance during movement/leaning, loading and
-map changes, HUD/menu regression checks, longer sessions, and actual headset
-frame-time/latency measurements. The automated stereo/culling tests now also
-check timestamp unit conversion, wrap and invalid timestamp parameters.
+The user subsequently ran this command and reported that the optimized game
+worked very well in the headset. The recorded session confirmed the option was
+enabled, exceeded 18,000 stereo submissions and contained no submission failure
+messages. Across 139 logged gameplay timing samples, the render/copy interval's
+median was 8.84 ms and p95 was 9.74 ms. These sampled intervals exclude some game
+and runtime work and are not full frame-time or latency measurements.
+
+A follow-up automated comparison used actual OpenXR eye views and swapchains,
+with the connected headset left stationary. All 600 comparison samples were
+labelled `display=headset`; none used the desktop fallback. The validation run
+contained no VUID messages or Vulkan submission failures. A scripted pause/back
+sequence also executed during the test. This supplements, but does not replace,
+the user's visual check.
+
+| Headset-connected validation run, per pair | Separate | Shared | Reduction |
+| --- | ---: | ---: | ---: |
+| CPU render recording and scene-copy lifetime | 4.257 ms | 3.772 ms | 11.4% |
+| GPU native rendering | 1.535 ms | 1.471 ms | 4.1% |
+| GPU transfer to OpenXR | 0.126 ms | 0.128 ms | Within measurement variation |
+
+Each variant averaged approximately 1674 scene items. The validation layer
+substantially slowed command replay and overall submission cadence, so these
+figures are comparisons of the recorded regions, not headset FPS claims.
+
+The next run without validation completed a further 600 samples, but the
+runtime had stopped marking the stationary headset renderable: all those
+samples correctly reported `display=desktop`. They measured 3.875 -> 3.357 ms
+CPU recording and 1.763 -> 1.695 ms GPU rendering. They are not counted as
+headset measurements. The scripted map-selection sequence executed in the
+isolated profile, but the inspected log did not unambiguously confirm a new
+map load; that coverage remains pending.
+
+Still required: broader movement/leaning and map coverage, longer sessions, and
+end-to-end headset frame-time/latency measurements. The automated
+stereo/culling tests also check timestamp unit conversion, wrap and invalid
+timestamp parameters.
