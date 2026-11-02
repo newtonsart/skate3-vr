@@ -19,13 +19,14 @@ def apply(sdk):
          "  bool renderer_native_ = true;",
          "  bool renderer_native_ = true;\n"
          "  int vr_mode_ = 0;\n"
+         "  int vr_resolution_index_ = 0;\n"
          "  float vr_window_width_ = 2.4f, vr_window_distance_ = 2.0f, vr_window_height_ = 0.0f;\n"
          "  float vr_camera_distance_ = 0, vr_camera_height_ = 0, vr_world_scale_ = 1;\n"
          "  float vr_hud_width_ = 1.6f, vr_hud_distance_ = 2.0f;\n"
          "  bool vr_pause_in_world_ = true;")
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          "constexpr std::array<std::string_view, 24> kOptionalSimpleSettingsCvars = {",
-         "constexpr std::array<std::string_view, 34> kOptionalSimpleSettingsCvars = {")
+         "constexpr std::array<std::string_view, 35> kOptionalSimpleSettingsCvars = {")
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          '    "user_language"};',
          '    "user_language",\n'
@@ -38,7 +39,8 @@ def apply(sdk):
          '    "skate3_vr_world_scale",\n'
          '    "skate3_vr_hud_width",\n'
          '    "skate3_vr_hud_distance",\n'
-         '    "skate3_vr_pause_in_world"};')
+         '    "skate3_vr_pause_in_world",\n'
+         '    "skate3_vr_render_scale"};')
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          '    case 0: {  // Video\n      header("Display");',
          '''    case 0: {  // Video
@@ -66,6 +68,30 @@ def apply(sdk):
           SaveSimpleSettingsConfig(config_path_);
         };
         rows.push_back(std::move(row));
+        static constexpr std::array<double, 4> vr_scales = {0.0, 0.75, 1.0, 1.25};
+        const double scale = rex::cvar::Query<double>("skate3_vr_render_scale");
+        vr_resolution_index_ = 0;
+        for (int i = 1; i < 4; ++i)
+          if (std::abs(vr_scales[i] - scale) < std::abs(vr_scales[vr_resolution_index_] - scale))
+            vr_resolution_index_ = i;
+        RowSpec quality;
+        quality.label = "VR Render Resolution";
+        quality.desc = "Render directly at the headset's recommended resolution instead of stretching the desktop image. "
+                       "HMD 100% gives one source pixel per recommended eye pixel. Higher values cost more GPU time. "
+                       "Desktop restores the previous rendering path. Applies after the next frame.";
+        quality.options = {"Desktop (compatibility)", "HMD 75%", "HMD 100%", "HMD 125%"};
+        quality.index = &vr_resolution_index_;
+        quality.on_enum_change = [this](int value) {
+          vr_resolution_index_ = value;
+          rex::cvar::SetFlagByName("skate3_vr_render_scale", std::to_string(vr_scales[value]));
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        quality.reset = [this] {
+          vr_resolution_index_ = 0;
+          rex::cvar::SetFlagByName("skate3_vr_render_scale", "0");
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        rows.push_back(std::move(quality));
         auto vr_slider = [&](const char* label, const char* name, float* value,
                              float minimum, float maximum, bool enabled,
                              const char* desc, const char* fmt = "%.1f m") {
@@ -301,6 +327,38 @@ void NativeRhiEndFrame(nrhi::Device* device) {""")
     return;
   }
   if (!EnsureDrawState()) return;""")
+
+    edit("include/rex/graphics/vulkan/native_rhi_vulkan.h",
+         "}  // namespace rex::graphics::vulkan",
+         "void NativeRhiSetOutputSizeOverride(uint32_t width, uint32_t height);\n"
+         "void NativeRhiApplyOutputSizeOverride(uint32_t& width, uint32_t& height);\n\n"
+         "uint32_t NativeRhiOriginalOutputHeight();\n\n"
+         "}  // namespace rex::graphics::vulkan")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp", "#include <chrono>", "#include <chrono>\n#include <atomic>")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         "}  // namespace rex::graphics::vulkan", """namespace {
+std::atomic<uint64_t> native_output_override{0};
+std::atomic<uint32_t> native_output_original_height{0};
+}
+void NativeRhiSetOutputSizeOverride(uint32_t width, uint32_t height) {
+  const uint64_t size = width && height ? (uint64_t(width) << 32) | height : 0;
+  if (native_output_override.exchange(size, std::memory_order_relaxed) != size)
+    REXLOG_INFO("Native Vulkan: output override {}x{} (0 disables)", width, height);
+}
+void NativeRhiApplyOutputSizeOverride(uint32_t& width, uint32_t& height) {
+  native_output_original_height.store(height, std::memory_order_relaxed);
+  const auto size = native_output_override.load(std::memory_order_relaxed);
+  if (size) { width = uint32_t(size >> 32); height = uint32_t(size); }
+}
+uint32_t NativeRhiOriginalOutputHeight() {
+  return native_output_original_height.load(std::memory_order_relaxed);
+}
+
+}  // namespace rex::graphics::vulkan""")
+    edit("src/graphics/vulkan/command_processor.cpp",
+         "  presenter->RefreshGuestOutput(\n      guest_output_width, guest_output_height, display_width, display_height,",
+         "  NativeRhiApplyOutputSizeOverride(guest_output_width, guest_output_height);\n"
+         "  presenter->RefreshGuestOutput(\n      guest_output_width, guest_output_height, display_width, display_height,")
 
 
 if __name__ == "__main__":

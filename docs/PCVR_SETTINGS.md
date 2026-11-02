@@ -15,7 +15,7 @@ game's APT pause-menu assets.
   left/right, and goes back with B. Reset uses Y (R on keyboard).
 - Changes apply immediately and use the existing per-user settings file.
 
-Video includes VR mode, window width/distance/height, additional immersive-camera
+Video includes VR mode and render resolution, window width/distance/height, additional immersive-camera
 distance/height, world scale, HUD width/distance, pause presentation and recenter.
 Camera distance is an offset from the game's current follow camera, not an
 absolute distance to the skater. Positive values move backward, positive height
@@ -26,6 +26,13 @@ collision avoidance for the additional offsets have not been added.
 Window controls apply in window modes; camera/HUD controls apply in immersive
 mode. Recenter also has the existing Ctrl+F8 shortcut. World scale affects both
 modes. Ordinary desktop runs do not render the additional settings surface.
+
+**VR Render Resolution** offers Desktop (compatibility), HMD 75%, HMD 100% and
+HMD 125%. The HMD choices size the source render target from OpenXR's recommended
+eye dimensions, independently of the desktop output resolution. The HUD and
+window retain the display's logical aspect. HMD 100% is the first quality setting
+to compare; Desktop restores the original path. See [PCVR_IMAGE_QUALITY.md](PCVR_IMAGE_QUALITY.md)
+for measured dimensions and validation limits.
 
 ## Pause presentation
 

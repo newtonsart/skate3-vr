@@ -13,7 +13,8 @@ FILES = ["include/rex/ui/vulkan/instance.h", "src/ui/vulkan/vulkan_instance.cpp"
          "include/rex/ui/overlay/simple_settings_overlay.h",
          "src/ui/overlay/simple_settings_overlay.cpp",
          "include/rex/ui/imgui_drawer.h", "src/ui/imgui_drawer.cpp",
-         "include/rex/ui/vulkan/presenter.h", "src/ui/vulkan/vulkan_presenter.cpp"]
+         "include/rex/ui/vulkan/presenter.h", "src/ui/vulkan/vulkan_presenter.cpp",
+         "src/graphics/vulkan/command_processor.cpp"]
 
 
 class InteropTests(unittest.TestCase):
@@ -31,10 +32,11 @@ class InteropTests(unittest.TestCase):
             self.assertIn("FlushNativeForExternal", (sdk / FILES[4]).read_text())
             self.assertIn("hooks.create_instance", (sdk / FILES[1]).read_text())
             self.assertIn('row.label = "VR View"', (sdk / FILES[8]).read_text())
-            self.assertIn('"skate3_vr_pause_in_world"};', (sdk / FILES[8]).read_text())
+            self.assertIn('"skate3_vr_render_scale"};', (sdk / FILES[8]).read_text())
             self.assertIn('recenter.label = "Recenter VR"', (sdk / FILES[8]).read_text())
             self.assertIn("mirror_end_();", (sdk / FILES[10]).read_text())
             self.assertIn("command_buffers[3]", (sdk / FILES[12]).read_text())
+            self.assertIn("NativeRhiApplyOutputSizeOverride(guest_output_width", (sdk / FILES[13]).read_text())
 
     def test_refuse_source_checkout(self):
         with tempfile.TemporaryDirectory() as directory:

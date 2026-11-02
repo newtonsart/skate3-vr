@@ -30,6 +30,8 @@ Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
 - [x] Initial immersive third-person view with independent head orientation.
 - [x] Add headset settings composition, camera offsets and pause-over-world path
   (compiled and checked with Vulkan; headset validation pending).
+- [x] Add independent eye render resolution; the user confirmed a large clarity
+  improvement with HMD rendering over wired Quest Link. See [PCVR_IMAGE_QUALITY.md](PCVR_IMAGE_QUALITY.md).
 - [ ] Complete comfort limits, camera settings and broader immersive-mode tests.
 - [x] Implement optional stereoscopic window and passthrough composition.
 - [ ] Validate the window and passthrough visually on the headset; Meta settings

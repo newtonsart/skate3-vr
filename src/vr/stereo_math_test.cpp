@@ -3,12 +3,35 @@
 #include "gpu_timing.h"
 #include "openxr_passthrough.h"
 #include "presentation.h"
+#include "render_resolution.h"
 #include <limits>
 #include <cmath>
 #include <stdexcept>
 
 void Check(bool condition) { if(!condition) throw std::runtime_error("Stereo matrix check failed"); }
 int main() {
+  const auto legacy=skate3::vr::EyeRenderExtent(2272,2464,0);
+  Check(!legacy.width && !legacy.height);
+  const auto native=skate3::vr::EyeRenderExtent(2272,2464,1);
+  Check(native.width==2272 && native.height==2464);
+  const auto reduced=skate3::vr::EyeRenderExtent(2272,2464,0.75);
+  Check(reduced.width==1704 && reduced.height==1848);
+  const auto supersampled=skate3::vr::EyeRenderExtent(2272,2464,1.25);
+  Check(supersampled.width==2840 && supersampled.height==3080);
+  Check(std::abs(skate3::vr::PanelAspect(1280,720,2272,2464)-16.f/9)<1e-6f);
+  Check(std::abs(skate3::vr::PanelAspect(0,0,1920,1080)-16.f/9)<1e-6f);
+  for (double invalid : {-1.,1.5,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}) {
+    bool rejected=false;
+    try { skate3::vr::EyeRenderExtent(2272,2464,invalid); }
+    catch (const std::runtime_error&) { rejected=true; }
+    Check(rejected);
+  }
+  for (auto dimensions : {skate3::vr::RenderExtent{0,2464},skate3::vr::RenderExtent{16384,2464}}) {
+    bool rejected=false;
+    try { skate3::vr::EyeRenderExtent(dimensions.width,dimensions.height,1); }
+    catch (const std::runtime_error&) { rejected=true; }
+    Check(rejected);
+  }
   Check(skate3::vr::CanPresentWorld(true,1'000'000,false,false,true));
   Check(skate3::vr::CanPresentWorld(true,1'000'000,true,true,true));
   Check(!skate3::vr::CanPresentWorld(true,1'000'000,true,false,true));

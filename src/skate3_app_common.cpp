@@ -839,7 +839,7 @@ void Skate3BaseApp::OnPostSetup() {
 
 void Skate3BaseApp::OnPreSetup(rex::RuntimeConfig& config) {
 #if SKATE3_HAS_OPENXR
-  if (rex::cvar::Query<bool>("skate3_vr")) {
+  if (rex::cvar::Query<bool>("skate3_vr") || rex::cvar::Query<bool>("skate3_vr_resolution_test")) {
     skate3::vr::InitializeGameVr();
     config.graphics = std::make_unique<rex::graphics::vulkan::VulkanGraphicsSystem>();
   }

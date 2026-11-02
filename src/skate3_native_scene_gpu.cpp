@@ -3592,10 +3592,15 @@ bool EnsureShadowResources(const NativeGuestOutputRenderContext& context) {
   // any device-limit clamping the texture cache applied, and gives the same
   // effective shadow raster the emulated GPU renders at that scale.
   const int32_t tile_cfg = REXCVAR_GET(skate3_native_render_scene_shadow_tile);
+  uint32_t shadow_height=context.guest_output_height;
+#if SKATE3_HAS_OPENXR
+  // Eye raster quality must not silently quadruple the auto shadow atlas.
+  shadow_height=skate3::vr::GameVrShadowReferenceHeight(shadow_height);
+#endif
   const uint32_t want_tile =
       tile_cfg > 0
           ? uint32_t(tile_cfg)
-          : std::min(512u * std::max(1u, (context.guest_output_height + 719u) /
+          : std::min(512u * std::max(1u, (shadow_height + 719u) /
                                              720u),
                      4096u);
   if (g_r.shadow_raw != nullptr && g_r.shadow_tile != want_tile) {

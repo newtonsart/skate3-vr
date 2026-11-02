@@ -26,6 +26,7 @@ void ToggleGameVrColor();
 void ToggleGameVrCulling();
 void CycleGameVrMode();
 bool GameVrEnabled();
+uint32_t GameVrShadowReferenceHeight(uint32_t fallback);
 void SetGameVrSettingsVisible(bool visible);
 void PresentFlatMenu(const rex::graphics::NativeGuestOutputRenderContext& context);
 bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& context,

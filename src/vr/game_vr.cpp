@@ -10,6 +10,7 @@
 #include "openxr_session.h"
 #include "openxr_passthrough.h"
 #include "settings_surface.h"
+#include "render_resolution.h"
 #include "stereo_math.h"
 #include "cull_frustum.h"
 #include "gpu_timing.h"
@@ -36,6 +37,9 @@
 REXCVAR_DEFINE_BOOL(skate3_vr, false, "VR", "Experimental native OpenXR stereo rendering")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_world_scale, 1.0, "VR", "Game units per physical meter");
+REXCVAR_DEFINE_DOUBLE(skate3_vr_render_scale, 0.0, "VR", "Eye render scale relative to OpenXR recommendation; 0 keeps desktop resolution").range(0.0,1.25);
+REXCVAR_DEFINE_BOOL(skate3_vr_resolution_test, false, "VR", "Desktop-only target-size diagnostic using the recorded 2272x2464 recommendation")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly).debug_only();
 REXCVAR_DEFINE_DOUBLE(skate3_vr_camera_distance, 0.0, "VR", "Additional immersive camera distance in meters").range(-2.0,8.0);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_camera_height, 0.0, "VR", "Additional immersive camera height in meters").range(-2.0,4.0);
 REXCVAR_DEFINE_BOOL(skate3_vr_recenter_requested, false, "VR", "Recenter on the next tracked frame");
@@ -88,6 +92,17 @@ struct State {
   int last_mode=-1;
   bool settings_presented=false;
   float settings_aspect=16.0f/9;
+  double render_scale=-1;
+  void UpdateResolution() {
+    const double scale=REXCVAR_GET(skate3_vr_render_scale);
+    if (scale==render_scale) return;
+    const auto& views=xr.views();
+    const auto extent=EyeRenderExtent(std::max(views[0].recommendedImageRectWidth,views[1].recommendedImageRectWidth),
+        std::max(views[0].recommendedImageRectHeight,views[1].recommendedImageRectHeight),scale);
+    vulkan::NativeRhiSetOutputSizeOverride(extent.width,extent.height);
+    render_scale=scale;
+    REXLOG_INFO("VR: render scale {} target={}x{}; logical panel aspect follows display dimensions",scale,extent.width,extent.height);
+  }
   rex::ui::vulkan::VulkanDevice* gpu=nullptr;
   VkDevice device=VK_NULL_HANDLE;
   VkCommandPool pool=VK_NULL_HANDLE;
@@ -461,9 +476,17 @@ VkResult CreateDevice(void* user,PFN_vkGetInstanceProcAddr proc,VkPhysicalDevice
 }
 
 void InitializeGameVr() {
+  if (REXCVAR_GET(skate3_vr_resolution_test)) {
+    if (REXCVAR_GET(skate3_vr)) throw std::runtime_error("VR resolution diagnostic requires skate3_vr=false");
+    const auto extent=EyeRenderExtent(2272,2464,REXCVAR_GET(skate3_vr_render_scale));
+    vulkan::NativeRhiSetOutputSizeOverride(extent.width,extent.height);
+    REXLOG_INFO("VR resolution diagnostic: desktop-only {}x{}, no headset/session validation",extent.width,extent.height);
+    return;
+  }
   if(!REXCVAR_GET(skate3_vr)) return;
   std::lock_guard lock(mutex);
   state=std::make_unique<State>(); state->xr.Initialize(); state->xr.DetectHeadset();
+  state->UpdateResolution();
   rex::cvar::SetFlagByName("skate3_native_render_scene_occlusion_cull", "false");
   rex::cvar::SetFlagByName("skate3_native_render_scene_occlusion_cull_guest", "false");
   rex::cvar::SetFlagByName("skate3_native_render_scene_ssao", "false");
@@ -474,6 +497,7 @@ void InitializeGameVr() {
 void ShutdownGameVr() {
   std::lock_guard lock(mutex);
   ShutdownSettingsSurface(); settings_visible=false;
+  vulkan::NativeRhiSetOutputSizeOverride(0,0);
   rex::ui::vulkan::SetRuntimeHooks({}); state.reset();
 }
 void RecenterGameVr() {
@@ -510,6 +534,13 @@ void CycleGameVrMode() {
   rex::cvar::SetFlagByName("skate3_vr_mode",std::to_string(mode));
 }
 bool GameVrEnabled() { return REXCVAR_GET(skate3_vr); }
+uint32_t GameVrShadowReferenceHeight(uint32_t fallback) {
+  if ((GameVrEnabled() || REXCVAR_GET(skate3_vr_resolution_test)) && REXCVAR_GET(skate3_vr_render_scale)>0) {
+    const auto height=vulkan::NativeRhiOriginalOutputHeight();
+    if (height) return height;
+  }
+  return fallback;
+}
 void SetGameVrSettingsVisible(bool visible) { settings_visible=visible; }
 void PresentFlatMenu(const rex::graphics::NativeGuestOutputRenderContext& context) {
   RenderStereo(context, nullptr, [](const auto&, void*) { return true; });
@@ -529,6 +560,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
   }
   TrackingFrame frame; bool begun=false;
   try {
+    s.UpdateResolution();
     if(!s.session) s.Bind(static_cast<rex::ui::vulkan::VulkanDevice*>(vulkan::NativeRhiGetVulkanDevice(input.device)));
     const int mode=REXCVAR_GET(skate3_vr_mode);
     const bool window=mode!=0;
@@ -561,7 +593,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     const float window_width=float(REXCVAR_GET(skate3_vr_window_width));
     const float window_distance=float(REXCVAR_GET(skate3_vr_window_distance));
     const float window_height=float(REXCVAR_GET(skate3_vr_window_height));
-    const float aspect=float(input.guest_output_width)/float(input.guest_output_height);
+    const float aspect=PanelAspect(input.display_width,input.display_height,input.guest_output_width,input.guest_output_height);
     const bool pause_menu=scene && rex::kernel::guest_presence::GameplayContextValue()==0;
     if (window && !(window_width>=0.5f && window_width<=6 &&
         window_distance>=0.5f && window_distance<=8 && window_height>=-2 && window_height<=2 &&
@@ -643,7 +675,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       const float width=float(REXCVAR_GET(skate3_vr_menu_width));
       if(!(distance>=0.5f && distance<=10 && width>=0.5f && width<=10)) throw std::runtime_error("Invalid VR menu size/distance");
       menu.pose.position.z=-distance;
-      menu.size={width,width*float(context.guest_output_height)/float(context.guest_output_width)};
+      menu.size={width,width/aspect};
       const XrCompositionLayerBaseHeader* layers[4]{};
       uint32_t layer_count=0;
       XrCompositionLayerPassthroughFB background{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
