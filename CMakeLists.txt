@@ -239,6 +239,11 @@ endif()
 include(cmake/RexGlue.cmake)
 include(cmake/CodegenTargets.cmake)
 
+option(SKATE3_BUILD_OPENXR_PROBE "Build native OpenXR runtime diagnostics" OFF)
+if(SKATE3_BUILD_OPENXR_PROBE)
+    add_subdirectory(src/vr)
+endif()
+
 set(SKATE3_COMMON_SOURCES
     src/exception_compat.cpp
     src/skate3_app_common.cpp
