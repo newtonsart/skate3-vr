@@ -44,6 +44,53 @@ XrPosef RecenterPose(const XrPosef& head) {
   const float yaw=std::atan2(2*(q.w*q.y+q.x*q.z),1-2*(q.y*q.y+q.x*q.x));
   return {{0,std::sin(yaw/2),0,std::cos(yaw/2)},head.position};
 }
+XrPosef WindowPose(const XrPosef& reference,float distance,float height) {
+  if (!std::isfinite(distance) || distance<0.5f || !std::isfinite(height))
+    throw std::runtime_error("Invalid window position");
+  auto pose=reference;
+  const auto offset=Rotate(reference.orientation,{0,height,-distance});
+  pose.position.x+=offset.x; pose.position.y+=offset.y; pose.position.z+=offset.z;
+  return pose;
+}
+void MakeWindowEyeCamera(const float* vp,const float* proj,const float* camera,
+                         const XrPosef& reference,const XrView& eye,float scale,
+                         float width,float aspect,float distance,float height,
+                         float* output,float* projection,float* position) {
+  if (!std::isfinite(scale) || scale<=0 || !std::isfinite(width) || width<=0 ||
+      !std::isfinite(aspect) || aspect<=0 || !std::isfinite(distance) || distance<0.5f ||
+      !std::isfinite(height)) throw std::runtime_error("Invalid stereo window");
+  float inverse[16],game_view[16]; Invert(proj,inverse); Multiply(vp,inverse,game_view);
+  const auto& q=reference.orientation;
+  auto offset=Rotate({-q.x,-q.y,-q.z,q.w},{eye.pose.position.x-reference.position.x,
+      eye.pose.position.y-reference.position.y,eye.pose.position.z-reference.position.z});
+  offset.y-=height;
+  if (!std::isfinite(offset.x) || !std::isfinite(offset.y) || !std::isfinite(offset.z))
+    throw std::runtime_error("Invalid stereo window eye pose");
+  // Preserve the game's full camera orientation. Head rotation changes how
+  // the physical panel is viewed, without rotating the in-game camera.
+  float axes[3][3];
+  for (int a=0;a<3;++a) for (int k=0;k<3;++k)
+    axes[a][k]=game_view[k*4+a]*(a==1 ? 1.0f : -1.0f);
+  const float delta[3]={offset.x,offset.y,offset.z};
+  for (int k=0;k<3;++k) {
+    position[k]=camera[k];
+    for (int a=0;a<3;++a) position[k]+=axes[a][k]*delta[a]*scale;
+  }
+  float view[16]{}; view[15]=1;
+  for (int a=0;a<3;++a) {
+    for (int k=0;k<3;++k) view[k*4+a]=axes[a][k];
+    view[12+a]=-(position[0]*axes[a][0]+position[1]*axes[a][1]+position[2]*axes[a][2]);
+  }
+  const float depth=std::max(0.1f,distance+offset.z);
+  const float panel_height=width/aspect;
+  std::fill(projection,projection+16,0.0f);
+  projection[0]=2*depth/width; projection[5]=2*depth/panel_height;
+  projection[8]=-2*offset.x/width; projection[9]=-2*offset.y/panel_height;
+  const float near_z=0.05f*scale,far_z=10000*scale;
+  projection[10]=-far_z/(far_z-near_z); projection[11]=-1;
+  projection[14]=-far_z*near_z/(far_z-near_z);
+  Multiply(view,projection,output);
+}
 void MakeHudTransform(const XrPosef& head,const XrView& eye,const float* projection,
                       float width,float aspect,float distance,float* transform) {
   if(!(width>0 && aspect>0 && distance>=0.5f)) throw std::runtime_error("Invalid HUD panel");

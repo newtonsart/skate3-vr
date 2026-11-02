@@ -90,8 +90,8 @@ Configure the game with `SKATE3_ENABLE_OPENXR=ON`, `SKATE3_OPENXR_SDK_DIR`,
 `glslangValidator.exe`). Launch with `--gpu_backend=vulkan --skate3_vr=true`.
 Ctrl+F8 recenters the headset. The original gamepad remains the gameplay input.
 Frontend and pause UI use the emulated menu image on a view-relative 16:9 panel;
-gameplay uses independently rendered eye projections. A stereoscopic window
-mode is not implemented yet.
+gameplay uses independently rendered eye projections. The optional stereoscopic
+window and passthrough modes are described in [PCVR_PASSTHROUGH.md](PCVR_PASSTHROUGH.md).
 
 `skate3_vr_linear_color` defaults to true after isolated headset validation.
 Ctrl+F9 toggles conversion for comparison or recovery. The earlier black image

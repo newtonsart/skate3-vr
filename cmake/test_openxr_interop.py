@@ -9,7 +9,9 @@ FILES = ["include/rex/ui/vulkan/instance.h", "src/ui/vulkan/vulkan_instance.cpp"
          "src/ui/vulkan/vulkan_provider.cpp", "src/ui/vulkan/vulkan_device.cpp",
          "include/rex/graphics/vulkan/command_processor.h",
          "include/rex/graphics/vulkan/native_rhi_vulkan.h",
-         "src/graphics/vulkan/native_rhi_vulkan.cpp"]
+         "src/graphics/vulkan/native_rhi_vulkan.cpp",
+         "include/rex/ui/overlay/simple_settings_overlay.h",
+         "src/ui/overlay/simple_settings_overlay.cpp"]
 
 
 class InteropTests(unittest.TestCase):
@@ -26,6 +28,8 @@ class InteropTests(unittest.TestCase):
             self.assertEqual(first, [(sdk / name).read_bytes() for name in FILES])
             self.assertIn("FlushNativeForExternal", (sdk / FILES[4]).read_text())
             self.assertIn("hooks.create_instance", (sdk / FILES[1]).read_text())
+            self.assertIn('row.label = "VR View"', (sdk / FILES[8]).read_text())
+            self.assertIn('"skate3_vr_window_height"};', (sdk / FILES[8]).read_text())
 
     def test_refuse_source_checkout(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -37,8 +41,11 @@ class InteropTests(unittest.TestCase):
     def test_refuse_unrecognized_revision(self):
         with tempfile.TemporaryDirectory() as directory:
             sdk = Path(directory)
+            for name in FILES:
+                copied = sdk / name
+                copied.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(SOURCE / name, copied)
             target = sdk / FILES[0]
-            target.parent.mkdir(parents=True)
             target.write_text("Unrecognized Vulkan header")
             with self.assertRaises(ValueError):
                 apply(sdk)

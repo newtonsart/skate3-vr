@@ -755,6 +755,7 @@ void Skate3BaseApp::OnPostSetup() {
     rex::ui::RegisterBind("bind_skate3_vr_recenter", "Ctrl+F8", "Recenter VR view", [] { skate3::vr::RecenterGameVr(); });
     rex::ui::RegisterBind("bind_skate3_vr_color", "Ctrl+F9", "Toggle VR color conversion", [] { skate3::vr::ToggleGameVrColor(); });
     rex::ui::RegisterBind("bind_skate3_vr_culling", "Ctrl+F10", "Toggle experimental VR culling expansion", [] { skate3::vr::ToggleGameVrCulling(); });
+    rex::ui::RegisterBind("bind_skate3_vr_mode", "Ctrl+F11", "Cycle immersive VR / 3D window / room view", [] { skate3::vr::CycleGameVrMode(); });
   }
 #endif
   skate3::shader_disasm::RunIfRequested();
@@ -840,6 +841,7 @@ void Skate3BaseApp::OnShutdown() {
   rex::ui::UnregisterBind("bind_skate3_vr_capture");
   rex::ui::UnregisterBind("bind_skate3_vr_color");
   rex::ui::UnregisterBind("bind_skate3_vr_culling");
+  rex::ui::UnregisterBind("bind_skate3_vr_mode");
   skate3::vr::ShutdownGameVr();
 #endif
   rex::ui::UnregisterBind("bind_skate3_menu");

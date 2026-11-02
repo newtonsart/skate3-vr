@@ -22,6 +22,8 @@ class OpenXrContext {
   const std::vector<XrViewConfigurationView>& views() const { return views_; }
   XrVersion min_vulkan_version() const { return min_vulkan_; }
   XrVersion max_vulkan_version() const { return max_vulkan_; }
+  bool passthrough_extension_enabled() const { return passthrough_extension_enabled_; }
+  bool passthrough_supported() const { return passthrough_supported_; }
 
  private:
   XrInstance instance_ = XR_NULL_HANDLE;
@@ -29,5 +31,7 @@ class OpenXrContext {
   std::string runtime_, headset_;
   std::vector<XrViewConfigurationView> views_;
   XrVersion min_vulkan_ = 0, max_vulkan_ = 0;
+  bool passthrough_extension_enabled_ = false;
+  bool passthrough_supported_ = false;
 };
 }  // namespace skate3::vr

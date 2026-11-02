@@ -24,6 +24,7 @@ void RecenterGameVr();
 void CaptureGameVr();
 void ToggleGameVrColor();
 void ToggleGameVrCulling();
+void CycleGameVrMode();
 bool GameVrEnabled();
 void PresentFlatMenu(const rex::graphics::NativeGuestOutputRenderContext& context);
 bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& context,

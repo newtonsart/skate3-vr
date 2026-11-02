@@ -17,7 +17,8 @@ controller for all gameplay, head tracking from the headset via OpenXR.
 - **Immersive VR**: a stereoscopic, full-scale 3D world around the viewer,
   tracking the skater in third person with independent head orientation.
 - **Stereoscopic window**: a fixed virtual screen displaying the game in stereo,
-  with real binocular depth and no head-driven in-game camera.
+  with real binocular depth, positional parallax and the original game-camera
+  orientation. Optional room view uses runtime-provided passthrough.
 
 Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
 
@@ -28,7 +29,9 @@ Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
 - [x] Basic per-eye rendering and readable stereo HUD, confirmed on Quest 3.
 - [x] Initial immersive third-person view with independent head orientation.
 - [ ] Complete comfort limits, camera settings and broader immersive-mode tests.
-- [ ] Implement stereoscopic window mode.
+- [x] Implement optional stereoscopic window and passthrough composition.
+- [ ] Validate the window and passthrough visually on the headset; Meta settings
+  and an active Quest Link session are required. See [PCVR_PASSTHROUGH.md](PCVR_PASSTHROUGH.md).
 - [ ] Profile latency and frame time, target stable refresh.
 
 ## Dependencies

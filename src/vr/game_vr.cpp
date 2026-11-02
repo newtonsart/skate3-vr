@@ -8,6 +8,7 @@
 #include "game_vr.h"
 #include "openxr_context.h"
 #include "openxr_session.h"
+#include "openxr_passthrough.h"
 #include "stereo_math.h"
 #include "cull_frustum.h"
 #include "gpu_timing.h"
@@ -32,6 +33,11 @@
 REXCVAR_DEFINE_BOOL(skate3_vr, false, "VR", "Experimental native OpenXR stereo rendering")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_world_scale, 1.0, "VR", "Game units per physical meter");
+REXCVAR_DEFINE_INT32(skate3_vr_mode, 0, "VR", "0: immersive, 1: stereo window, 2: stereo window with room view").range(0,2);
+REXCVAR_DEFINE_DOUBLE(skate3_vr_window_width, 2.4, "VR", "Stereo window width in meters").range(0.5,6.0);
+REXCVAR_DEFINE_DOUBLE(skate3_vr_window_distance, 2.0, "VR", "Stereo window distance in meters").range(0.5,8.0);
+REXCVAR_DEFINE_DOUBLE(skate3_vr_window_height, 0.0, "VR", "Stereo window height relative to recenter in meters").range(-2.0,2.0);
+REXCVAR_DEFINE_STRING(skate3_vr_status, "", "VR", "Current room-view availability");
 REXCVAR_DEFINE_BOOL(skate3_vr_capture, false, "VR", "Capture one rendered stereo scene to local out/vr-eye-*.ppm");
 REXCVAR_DEFINE_DOUBLE(skate3_vr_menu_distance, 2.0, "VR", "Menu panel distance in meters");
 REXCVAR_DEFINE_DOUBLE(skate3_vr_menu_width, 2.4, "VR", "Menu panel width in meters");
@@ -69,6 +75,8 @@ struct EyeSwapchain {
 struct State {
   OpenXrContext xr;
   std::unique_ptr<OpenXrSession> session;
+  std::unique_ptr<OpenXrPassthrough> room;
+  int last_mode=-1;
   rex::ui::vulkan::VulkanDevice* gpu=nullptr;
   VkDevice device=VK_NULL_HANDLE;
   VkCommandPool pool=VK_NULL_HANDLE;
@@ -116,6 +124,7 @@ struct State {
       if(pool) vkDestroyCommandPool(device,pool,nullptr);
       if(readback) vkDestroyBuffer(device,readback,nullptr);
       if(readback_memory) vkFreeMemory(device,readback_memory,nullptr);
+      room.reset();
       session.reset();
     }
   }
@@ -124,6 +133,7 @@ struct State {
     session=std::make_unique<OpenXrSession>(xr);
     auto& queue=*gpu->queue_families()[gpu->queue_family_graphics_compute()].queues[0];
     session->Bind(gpu->vulkan_instance()->instance(),gpu->physical_device(),device,gpu->queue_family_graphics_compute(),&queue.mutex);
+    room=std::make_unique<OpenXrPassthrough>(xr,session->handle());
     uint32_t count=0;
     XrCheck(xrEnumerateSwapchainFormats(session->handle(),0,&count,nullptr),"Enumerate XR formats");
     std::vector<int64_t> formats(count);
@@ -477,6 +487,10 @@ void ToggleGameVrCulling() {
   rex::cvar::SetFlagByName("skate3_vr_expand_game_frustum",enabled?"true":"false");
   REXLOG_INFO("VR: main-camera culling expansion {}",enabled?"enabled":"disabled");
 }
+void CycleGameVrMode() {
+  const int mode=(REXCVAR_GET(skate3_vr_mode)+1)%3;
+  rex::cvar::SetFlagByName("skate3_vr_mode",std::to_string(mode));
+}
 bool GameVrEnabled() { return REXCVAR_GET(skate3_vr); }
 void PresentFlatMenu(const rex::graphics::NativeGuestOutputRenderContext& context) {
   RenderStereo(context, nullptr, [](const auto&, void*) { return true; });
@@ -497,6 +511,15 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
   TrackingFrame frame; bool begun=false;
   try {
     if(!s.session) s.Bind(static_cast<rex::ui::vulkan::VulkanDevice*>(vulkan::NativeRhiGetVulkanDevice(input.device)));
+    const int mode=REXCVAR_GET(skate3_vr_mode);
+    const bool window=mode!=0;
+    if (mode!=s.last_mode) {
+      s.recentered=false;
+      s.room->Disable();
+      rex::cvar::SetFlagByName("skate3_vr_status",mode==0 ? "Immersive VR" : "Stereo window; black background");
+      s.last_mode=mode;
+      REXLOG_INFO("VR: view mode {} (0 immersive, 1 window, 2 window + room)",mode);
+    }
     if(!s.session->PollEvents() || !s.session->BeginFrame(frame)) return s.BenchmarkDesktop(input,scene,render);
     begun=true;
     constexpr auto valid=XR_VIEW_STATE_ORIENTATION_VALID_BIT|XR_VIEW_STATE_POSITION_VALID_BIT;
@@ -504,6 +527,21 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       s.session->EndFrame(frame); begun=false; return s.BenchmarkDesktop(input,scene,render);
     }
     if(!s.recentered) { s.reference=RecenterPose(frame.head.pose); s.recentered=true; }
+    if (mode==2) {
+      const bool active=s.room->Enable();
+      const std::string status=active ? "Stereo window with room view" : "Stereo window; black background. "+s.room->error();
+      if (REXCVAR_GET(skate3_vr_status)!=status) {
+        rex::cvar::SetFlagByName("skate3_vr_status",status);
+        REXLOG_INFO("VR: {}",status);
+      }
+    }
+    const float window_width=float(REXCVAR_GET(skate3_vr_window_width));
+    const float window_distance=float(REXCVAR_GET(skate3_vr_window_distance));
+    const float window_height=float(REXCVAR_GET(skate3_vr_window_height));
+    const float aspect=float(input.guest_output_width)/float(input.guest_output_height);
+    if (window && !(window_width>=0.5f && window_width<=6 &&
+        window_distance>=0.5f && window_distance<=8 && window_height>=-2 && window_height<=2 &&
+        aspect>0 && aspect<=10)) throw std::runtime_error("Invalid VR window size/position");
     XrCompositionLayerProjectionView projections[2]={{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
     bool rendered=false,world_rendered=false;
     auto context=input;
@@ -528,11 +566,17 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       camera.shadows=share_work ? &shadows : nullptr;
       camera.render_scene=render_scene;
       if(scene && !scene->items.empty() && scene->proj[0]!=0) {
-        MakeEyeCamera(scene->view_proj,scene->proj,scene->cam_pos,s.reference,frame.eyes[eye],float(REXCVAR_GET(skate3_vr_world_scale)),camera.view_proj,camera.proj,camera.position);
+        if (window) {
+          MakeWindowEyeCamera(scene->view_proj,scene->proj,scene->cam_pos,s.reference,frame.eyes[eye],
+              float(REXCVAR_GET(skate3_vr_world_scale)),window_width,aspect,window_distance,window_height,
+              camera.view_proj,camera.proj,camera.position);
+        } else {
+          MakeEyeCamera(scene->view_proj,scene->proj,scene->cam_pos,s.reference,frame.eyes[eye],float(REXCVAR_GET(skate3_vr_world_scale)),camera.view_proj,camera.proj,camera.position);
+          MakeHudTransform(frame.head.pose,frame.eyes[eye],camera.proj,
+              float(REXCVAR_GET(skate3_vr_hud_width)),aspect,
+              float(REXCVAR_GET(skate3_vr_hud_distance)),camera.hud_transform);
+        }
         camera.override_camera=true;
-        MakeHudTransform(frame.head.pose,frame.eyes[eye],camera.proj,
-            float(REXCVAR_GET(skate3_vr_hud_width)),float(context.guest_output_width)/float(context.guest_output_height),
-            float(REXCVAR_GET(skate3_vr_hud_distance)),camera.hud_transform);
         if(capture) {
           const auto& pose=frame.eyes[eye].pose; const auto& fov=frame.eyes[eye].fov;
           REXLOG_INFO("VR: eye {} local=({:.4f},{:.4f},{:.4f}) fov=({:.4f},{:.4f},{:.4f},{:.4f}) world=({:.4f},{:.4f},{:.4f})",eye,pose.position.x,pose.position.y,pose.position.z,fov.angleLeft,fov.angleRight,fov.angleUp,fov.angleDown,camera.position[0],camera.position[1],camera.position[2]);
@@ -570,10 +614,31 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       if(!(distance>=0.5f && distance<=10 && width>=0.5f && width<=10)) throw std::runtime_error("Invalid VR menu size/distance");
       menu.pose.position.z=-distance;
       menu.size={width,width*float(context.guest_output_height)/float(context.guest_output_width)};
-      const auto* header=world_rendered
-          ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer)
-          : reinterpret_cast<const XrCompositionLayerBaseHeader*>(&menu);
-      s.session->EndFrame(frame,1,&header); begun=false;
+      const XrCompositionLayerBaseHeader* layers[3]{};
+      uint32_t layer_count=0;
+      XrCompositionLayerPassthroughFB background{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
+      if (mode==2 && s.room->layer()) {
+        background.flags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        background.layerHandle=s.room->layer();
+        layers[layer_count++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&background);
+      }
+      XrCompositionLayerQuad panels[2]={{XR_TYPE_COMPOSITION_LAYER_QUAD},{XR_TYPE_COMPOSITION_LAYER_QUAD}};
+      if (window) {
+        const auto pose=WindowPose(s.reference,window_distance,window_height);
+        for (int eye=0;eye<(world_rendered?2:1);++eye) {
+          auto& panel=panels[eye];
+          panel.space=s.session->local_space(); panel.pose=pose;
+          panel.size={window_width,window_width/aspect};
+          panel.eyeVisibility=world_rendered ? (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT) : XR_EYE_VISIBILITY_BOTH;
+          panel.subImage=projections[eye].subImage;
+          layers[layer_count++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&panel);
+        }
+      } else {
+        layers[layer_count++]=world_rendered
+            ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer)
+            : reinterpret_cast<const XrCompositionLayerBaseHeader*>(&menu);
+      }
+      s.session->EndFrame(frame,layer_count,layers); begun=false;
       if (compare && world_rendered && scene && scene->generation>300 && scene->items.size()>100 && !capture) {
         REXLOG_INFO("VR perf sample: mode={} display=headset items={} CPU-render={:.4f} CPU-scene-copy={:.4f} GPU-render={:.4f} GPU-copy={:.4f}",
             share_work?"shared":"separate",scene->items.size(),render_ms[0]+render_ms[1],

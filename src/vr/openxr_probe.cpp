@@ -1,5 +1,6 @@
 #include "openxr_context.h"
 #include "openxr_session.h"
+#include "openxr_passthrough.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -11,12 +12,17 @@
 
 int main(int argc, char** argv) {
   try {
-    const bool track = argc == 2 && std::strcmp(argv[1], "--track") == 0;
-    if (argc > 1 && !track) throw std::runtime_error("Usage: skate3-openxr-probe [--track]");
+    const bool passthrough = argc == 2 && std::strcmp(argv[1], "--passthrough") == 0;
+    const bool track = passthrough || (argc == 2 && std::strcmp(argv[1], "--track") == 0);
+    if (argc > 1 && !track) throw std::runtime_error("Usage: skate3-openxr-probe [--track|--passthrough]");
     skate3::vr::OpenXrContext context;
     context.Initialize();
     std::printf("Runtime: %s\n", context.runtime().c_str());
+    std::printf("Passthrough extension enabled: %s\n",context.passthrough_extension_enabled()?"yes":"no");
     context.DetectHeadset();
+    std::printf("Passthrough system support: %s\n",context.passthrough_supported()?"yes":"no");
+    if (passthrough && !context.passthrough_supported())
+      throw std::runtime_error("Enable Developer Runtime Features and Passthrough over Meta Quest Link in the Meta PC app (Settings > Beta), then retry");
     std::printf("HMD: %s\n", context.headset().c_str());
     for (size_t eye = 0; eye < context.views().size(); ++eye) {
       const auto& view = context.views()[eye];
@@ -36,6 +42,7 @@ int main(int argc, char** argv) {
     }
     skate3::vr::OpenXrSession session(context);
     session.Create(VK_API_VERSION_1_3);
+    skate3::vr::OpenXrPassthrough room(context,session.handle());
     std::printf("Vulkan 1.3 session created on %s. Tracking only; no game images submitted.\n", session.gpu_name());
     using Clock = std::chrono::steady_clock;
     auto start = Clock::now();
@@ -51,10 +58,21 @@ int main(int argc, char** argv) {
         std::printf("Session state: %d\n", int(previous));
       }
       skate3::vr::TrackingFrame frame;
-      if (!session.SampleTracking(frame)) {
+      if (!session.BeginFrame(frame)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;
       }
+      if (passthrough && frame.should_render) {
+        if (!room.Enable()) {
+          session.EndFrame(frame);
+          throw std::runtime_error(room.error());
+        }
+        XrCompositionLayerPassthroughFB layer{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
+        layer.flags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        layer.layerHandle=room.layer();
+        const auto* header=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer);
+        session.EndFrame(frame,1,&header);
+      } else session.EndFrame(frame);
       if (!frames) deadline = Clock::now() + std::chrono::seconds(10);
       ++frames;
       renderable += frame.should_render;
@@ -92,6 +110,8 @@ int main(int argc, char** argv) {
         next_log = Clock::now() + std::chrono::seconds(1);
       }
     }
+    const bool room_submitted=room.layer()!=XR_NULL_HANDLE;
+    room.Disable();
     session.RequestExit();
     const auto exit_deadline = Clock::now() + std::chrono::seconds(2);
     while (Clock::now() < exit_deadline && session.PollEvents() && session.running())
@@ -100,7 +120,9 @@ int main(int argc, char** argv) {
         frames, valid_head, tracked_head, valid_eyes, renderable);
     if (!valid_head || !tracked_head || !valid_eyes) throw std::runtime_error("No valid tracked 6DoF/stereo samples");
     std::printf("Head position range: (%.4f %.4f %.4f)m\n", maximum[0]-minimum[0], maximum[1]-minimum[1], maximum[2]-minimum[2]);
-    std::puts("Vulkan session and predicted 6DoF/eye poses verified. Stereo image rendering remains untested.");
+    if (passthrough && !room_submitted) throw std::runtime_error("No renderable frame for passthrough test; activate Quest Link in the headset");
+    std::puts(passthrough ? "Passthrough layer submitted; headset visual confirmation is still required."
+                         : "Vulkan session and predicted 6DoF/eye poses verified. Stereo image rendering remains untested.");
     return 0;
   } catch (const std::exception& error) {
     std::fprintf(stderr, "OpenXR: %s\n", error.what());

@@ -1,12 +1,22 @@
 #include "stereo_math.h"
 #include "cull_frustum.h"
 #include "gpu_timing.h"
+#include "openxr_passthrough.h"
 #include <limits>
 #include <cmath>
 #include <stdexcept>
 
 void Check(bool condition) { if(!condition) throw std::runtime_error("Stereo matrix check failed"); }
 int main() {
+  // Unsupported passthrough must remain optional and avoid calling XR with
+  // null handles, including repeated mode changes and shutdown.
+  skate3::vr::OpenXrContext unavailable;
+  skate3::vr::OpenXrPassthrough room(unavailable,XR_NULL_HANDLE);
+  Check(!room.Enable() && !room.layer() && !room.error().empty());
+  Check(!room.Enable() && !room.layer());
+  room.Disable();
+  Check(room.error().empty());
+  Check(!room.Enable() && !room.layer());
   Check(std::abs(skate3::vr::GpuDurationMs(100,1100,64,1000)-1.0)<1e-9);
   Check(std::abs(skate3::vr::GpuDurationMs(250,4,8,100000)-1.0)<1e-9);
   Check(skate3::vr::GpuDurationMs(0,1,0,1)<0);
@@ -73,4 +83,68 @@ int main() {
   const std::array<float,24> orthographic={1,0,0,-9, -1,0,0,11,
       0,-1,0,21, 0,1,0,-19, 0,0,1,-31, 0,0,-1,130};
   Check(!skate3::vr::ExpandMainCullFrustum(orthographic,cull_camera,100,expanded));
+  // The physical window plane has zero stereo disparity. Near/far points
+  // have opposite disparities; changing head orientation never rotates it.
+  float window_vp[2][16],window_p[2][16],window_pos[2][3];
+  eye.pose.orientation={0,0,0,1}; eye.pose.position={0,0,0};
+  for (int e=0;e<2;++e) {
+    eye.pose.position.x=e ? 0.032f : -0.032f;
+    skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2.4f,16.0f/9,2,0,
+        window_vp[e],window_p[e],window_pos[e]);
+    const float* m=window_vp[e];
+    Check(std::abs((2*m[8]+m[12])/(2*m[11]+m[15]))<1e-5f);
+    Check(std::abs((1.2f*window_p[e][0])/2-1)<1e-5f);
+    // Original scene camera/projection remain untouched.
+    Check(p[0]==-1 && camera[0]==0);
+  }
+  const auto disparity=[&](float z) {
+    float x[2];
+    for (int e=0;e<2;++e) { const float* m=window_vp[e]; x[e]=(z*m[8]+m[12])/(z*m[11]+m[15]); }
+    return x[0]-x[1];
+  };
+  Check(disparity(1)>0 && disparity(4)<0);
+  const float previous=window_vp[1][0];
+  eye.pose.orientation={0,0.7071068f,0,0.7071068f};
+  skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2.4f,16.0f/9,2,0,
+      vp,projection,position);
+  Check(std::abs(vp[0]-previous)<1e-5f);
+  // Head translation cancels in projection at the fixed window plane.
+  eye.pose.position={0.3f,0.2f,0.4f};
+  skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2.4f,16.0f/9,2,0,
+      vp,projection,position);
+  Check(std::abs((2*vp[8]+vp[12])/(2*vp[11]+vp[15]))<1e-5f);
+  Check(std::abs((2*vp[9]+vp[13])/(2*vp[11]+vp[15]))<1e-5f);
+  const auto panel=skate3::vr::WindowPose(reference,2,0.3f);
+  Check(std::abs(panel.position.z+2)<1e-5f && std::abs(panel.position.y-0.3f)<1e-5f);
+  auto rotated_reference=reference;
+  rotated_reference.orientation={0,0.7071068f,0,0.7071068f};
+  const auto rotated_panel=skate3::vr::WindowPose(rotated_reference,2,0);
+  Check(std::abs(rotated_panel.position.x+2)<1e-5f && std::abs(rotated_panel.position.z)<1e-5f);
+  bool bad_window=false;
+  try { skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,0,1,2,0,vp,projection,position); }
+  catch (const std::runtime_error&) { bad_window=true; }
+  Check(bad_window);
+  // A pitched game camera and nonzero world position still converge at the
+  // panel plane, with the head reference rotated independently in XR space.
+  const float angle=0.4f,cs=std::cos(angle),sn=std::sin(angle);
+  const float origin[3]={10,20,30};
+  float view[16]={1,0,0,0, 0,cs,sn,0, 0,-sn,cs,0, -10,0,0,1};
+  view[13]=-(origin[1]*cs-origin[2]*sn);
+  view[14]=-(origin[1]*sn+origin[2]*cs);
+  float pitched_vp[16]{};
+  for (int r=0;r<4;++r) for (int c=0;c<4;++c) for (int k=0;k<4;++k)
+    pitched_vp[r*4+c]+=view[r*4+k]*p[k*4+c];
+  const float center[3]={10,20+2*sn,30+2*cs};
+  rotated_reference.position={3,4,5};
+  eye.pose.position={3.4f,4.2f,4.7f};
+  skate3::vr::MakeWindowEyeCamera(pitched_vp,p,origin,rotated_reference,eye,1,
+      2.4f,16.0f/9,2,0.1f,vp,projection,position);
+  const auto clip=[&](int c) { return center[0]*vp[c]+center[1]*vp[4+c]+center[2]*vp[8+c]+vp[12+c]; };
+  Check(clip(3)>0 && std::abs(clip(0)/clip(3))<1e-4f && std::abs(clip(1)/clip(3))<1e-4f);
+  for (float invalid : {0.f,-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+    bool rejected_window=false;
+    try { skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,invalid,2.4f,1,2,0,vp,projection,position); }
+    catch (const std::runtime_error&) { rejected_window=true; }
+    Check(rejected_window);
+  }
 }

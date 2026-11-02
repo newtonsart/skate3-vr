@@ -15,6 +15,65 @@ def apply(sdk):
             raise ValueError(f"Pinned SDK patch anchor mismatch: {name}: {old[:65]}")
         path.write_text(text.replace(old, new), encoding="utf-8")
 
+    edit("include/rex/ui/overlay/simple_settings_overlay.h",
+         "  bool renderer_native_ = true;",
+         "  bool renderer_native_ = true;\n"
+         "  int vr_mode_ = 0;\n"
+         "  float vr_window_width_ = 2.4f, vr_window_distance_ = 2.0f, vr_window_height_ = 0.0f;")
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         "constexpr std::array<std::string_view, 24> kOptionalSimpleSettingsCvars = {",
+         "constexpr std::array<std::string_view, 28> kOptionalSimpleSettingsCvars = {")
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         '    "user_language"};',
+         '    "user_language",\n'
+         '    "skate3_vr_mode",\n'
+         '    "skate3_vr_window_width",\n'
+         '    "skate3_vr_window_distance",\n'
+         '    "skate3_vr_window_height"};')
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         '    case 0: {  // Video\n      header("Display");',
+         '''    case 0: {  // Video
+      if (HasCvar("skate3_vr_mode") && HasCvar("skate3_vr") &&
+          rex::cvar::Query<bool>("skate3_vr")) {
+        vr_mode_ = rex::cvar::Query<int32_t>("skate3_vr_mode");
+        RowSpec row;
+        row.label = "VR View";
+        row.desc = "Choose immersive VR or a floating stereoscopic window. Room view "
+                   "requires passthrough support from your headset and PC runtime. "
+                   "Ctrl+F11 cycles modes; Ctrl+F8 places the window in front of you.";
+        if (HasCvar("skate3_vr_status"))
+          row.desc_extra = rex::cvar::Query<std::string>("skate3_vr_status");
+        row.options = {"Immersive VR", "3D window", "3D window + room view"};
+        row.index = &vr_mode_;
+        row.on_enum_change = [this](int value) {
+          vr_mode_ = value;
+          rex::cvar::SetFlagByName("skate3_vr_mode", std::to_string(value));
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        rows.push_back(std::move(row));
+        auto window_slider = [&](const char* label, const char* name, float* value,
+                                 float minimum, float maximum) {
+          *value = float(rex::cvar::Query<double>(name));
+          RowSpec slider;
+          slider.kind = RowSpec::kSlider;
+          slider.label = label;
+          slider.desc = "Applies immediately to the floating window. Ctrl+F8 recenters it.";
+          slider.enabled = vr_mode_ != 0;
+          slider.value = value;
+          slider.min = minimum; slider.max = maximum;
+          slider.step = 0.1f; slider.fmt = "%.1f m";
+          slider.on_value_change = [this, name, value] {
+            rex::cvar::SetFlagByName(name, std::to_string(*value));
+            SaveSimpleSettingsConfig(config_path_);
+          };
+          rows.push_back(std::move(slider));
+        };
+        window_slider("VR Window Width", "skate3_vr_window_width", &vr_window_width_, 0.5f, 6.0f);
+        window_slider("VR Window Distance", "skate3_vr_window_distance", &vr_window_distance_, 0.5f, 8.0f);
+        window_slider("VR Window Height", "skate3_vr_window_height", &vr_window_height_, -2.0f, 2.0f);
+      }
+      header("Display");''')
+
     edit("include/rex/ui/vulkan/instance.h", "class VulkanInstance {", """// OpenXR interop: installed before graphics creation, immutable while in use.
 struct RuntimeHooks {
   void* user = nullptr;
