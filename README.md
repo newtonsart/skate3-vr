@@ -1,18 +1,134 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="banner.png">
   <source media="(prefers-color-scheme: light)" srcset="banner-light.png">
-  <img alt="Skate 3 Native PC Recompilation" src="banner-light.png">
+  <img alt="Skate3Recomp VR — native OpenXR and Vulkan" src="banner-light.png">
 </picture>
 
-An unofficial native recompilation of the Xbox 360 version of Skate 3, supporting Windows, Linux, and macOS.
+# Skate3Recomp VR
 
-As of v2.0.0, the game runs on a native renderer built directly on Direct3D 12 and Vulkan instead of emulating the Xbox 360 GPU. Compared to the emulated renderer it delivers more than twice the frame rate at roughly a quarter of the GPU power draw, and on Apple Silicon the frame rate uplift is closer to 10x.
+An experimental PCVR fork of [Skate3Recomp](https://github.com/mchughalex/skate3recomp),
+with native **OpenXR + Vulkan** integration. The game renders a different world
+view for each eye and uses headset tracking while retaining the original
+gamepad controls. VR development is included in this fork's **`main` branch**.
 
-The new native renderer is early and is likely to have issues, I haven't tested the game all the way through.
+**Status: playable alpha, with more testing needed.** Immersive gameplay has
+been tested on **Windows, Meta Quest 3 over wired Quest Link, and an RTX 4080**.
+The user confirmed stereo fusion, improved HUD/menu readability and a large
+clarity improvement with headset-sized rendering. This is not a finished VR
+release or a guarantee of stable 72/90 FPS across the game.
 
 The project does not include Skate 3 retail game files. To run or build the project, you must provide files from your own legally obtained Xbox 360 copy of Skate 3.
 
-Native Rendering Showcase (click to go to YouTube):
+## VR features and current limits
+
+- Native per-eye scene rendering through a shared ReXGlue/OpenXR Vulkan device.
+- Third-person immersive view with independent head orientation and positional
+  tracking; adjustable camera distance, height and world scale.
+- Settings visible inside the headset, navigable with the original controller:
+  VR mode, render resolution, camera, window placement, HUD and recentering.
+- Headset-sized render targets, independent of the desktop resolution. **HMD
+  100%** removed the previous 1440-row upscale in the tested configuration.
+- Shared scene/shadow work between eyes, corrected compositor color and queue
+  synchronization, plus a fix for the difficulty-selection movie transition.
+- In-game pause can retain the stereo world and head tracking behind the menu;
+  the previous flat panel remains available for compatibility. This newer pause
+  path still needs broader headset testing.
+
+| Mode | Behavior | Validation |
+| --- | --- | --- |
+| Immersive VR | Stereo world around the viewer, following the skater | Gameplay and image-quality checks on Quest 3 |
+| 3D window | Fixed virtual screen with separate eye perspectives and positional parallax | Implemented; broader visual checks pending |
+| 3D window + room view | Stereo window over runtime-provided passthrough | Requires optional `XR_FB_passthrough`; camera background not yet validated on the target setup |
+
+OpenXR is not specific to Meta, but **other headsets/runtimes have not been
+validated here**. Passthrough support is separate from ordinary OpenXR support.
+VR on Linux/macOS is untested; their desktop support comes from the base project.
+There is no Touch/motion-controller gameplay. Large head movements, streaming,
+other maps and editor/photo/replay flows still need coverage; conservative
+culling expansion cannot restore geometry the game has not loaded.
+
+## Run in VR
+
+Use an **OpenXR-enabled build of this fork**. The ordinary desktop build
+instructions below do not enable OpenXR. See [PCVR build instructions](docs/PCVR_BUILD.md#build-the-openxr-game-on-windows)
+for the Windows toolchain, local game data/TU3, OpenXR SDK and disposable
+ReXGlue patch setup.
+
+1. Connect the headset and activate its PCVR session. On Quest, enter Quest Link
+   and select Meta Quest Link as the active OpenXR runtime in the Meta PC app.
+2. Connect a conventional Xbox/PlayStation controller.
+3. From the repository root, launch the configured VR build:
+
+```powershell
+./out/build/relwithdebinfo/skate3.exe --gpu_backend=vulkan --skate3_vr=true --game_data_root="$PWD/game" --user_data_root="$PWD/out/runtime-test" --skate3_native_render_scene_msaa=1 --skate3_vr_share_frame_work=true
+```
+
+Keep using the same `user_data_root` to retain your saves, profile and settings.
+Use your existing path if it differs. VR is opt-in (`skate3_vr` defaults off).
+
+Open **RB + Start → Video → VR Render Resolution** and compare **HMD 100%**.
+The build defaults to **Desktop (compatibility)**; the chosen setting is saved.
+With the tested runtime recommendation, source sizes are:
+
+| Setting | Per-eye source size | Use |
+| --- | --- | --- |
+| Desktop (compatibility) | Follows desktop render settings; previously 2560×1440 | Previous rendering path |
+| HMD 75% | 1704×1848 | Lower GPU cost |
+| HMD 100% | 2272×2464 | First setting to compare for improved clarity |
+| HMD 125% | 2840×3080 | More supersampling and GPU cost |
+
+Actual recommendations vary with the runtime/headset settings. HMD 100% draws
+about 52% more source pixels than the previous 2560×1440 path on this setup;
+that is not a measured FPS cost. Automatic shadows retain their previous
+resolution, and retail textures remain unchanged. Start with MSAA off (one
+sample) as in the tested launch above. More detail: [image quality](docs/PCVR_IMAGE_QUALITY.md).
+
+### VR controls
+
+| Input | Action |
+| --- | --- |
+| Original gamepad controls | Play Skate 3 |
+| Start | Original pause menu, with the stereo-world route enabled by default |
+| RB + Start | Mod settings, also visible in the headset; configurable under Controls |
+| F1 / Escape | Open mod settings from the keyboard |
+| Ctrl + F8 | Recenter head tracking / place the window in front of you |
+| Ctrl + F11 | Cycle immersive VR, 3D window and room-view window |
+| Ctrl + F7 | Request diagnostic source captures for both eyes |
+| Ctrl + F9 | Toggle compositor color conversion for comparison/recovery |
+| Ctrl + F10 | Toggle conservative culling expansion for comparison/recovery |
+
+Video settings include **VR View**, **VR Render Resolution**, window
+width/distance/height, camera offsets, world scale, HUD width/distance,
+**VR Pause View** and **Recenter VR**. Choose **VR Pause View → Flat panel** to
+restore the earlier pause presentation. See [settings and pause](docs/PCVR_SETTINGS.md).
+
+For room view on Meta's PC runtime, enable **Developer Runtime Features** and
+**Passthrough over Meta Quest Link** under Settings → Beta, accept Meta's notice,
+then restart the game. If support or permission is unavailable, the stereo
+window uses a black background. See [passthrough setup and test limits](docs/PCVR_PASSTHROUGH.md).
+
+### VR development and testing
+
+- [Build and OpenXR diagnostics](docs/PCVR_BUILD.md)
+- [Settings, camera and pause](docs/PCVR_SETTINGS.md)
+- [Render resolution and image quality](docs/PCVR_IMAGE_QUALITY.md)
+- [Shared-work optimization and measured regions](docs/PCVR_PERFORMANCE.md)
+- [Stereo window and passthrough](docs/PCVR_PASSTHROUGH.md)
+- [Roadmap and remaining tests](docs/PCVR_ROADMAP.md)
+- [Original v0.1.0-alpha checkpoint](docs/PCVR_V0_1_CHECKPOINT.md) — historical;
+  later improvements are included on `main`.
+
+The following sections retain the base project's desktop installation, renderer,
+build and controller documentation. Standard desktop builds do not include this
+fork's OpenXR integration unless explicitly configured for it.
+
+## Base recompilation
+
+The base project is an unofficial native recompilation of the Xbox 360 version
+of Skate 3, supporting Windows, Linux and macOS. Its native renderer uses
+Direct3D 12 or Vulkan. This fork's VR path uses Vulkan.
+
+Upstream native-rendering showcase (desktop, not a VR demonstration):
 
 <p align="center">
   <a href="https://youtu.be/ETXCOsip1Uo">
@@ -21,6 +137,9 @@ Native Rendering Showcase (click to go to YouTube):
 </p>
 
 ## How Do I Play?
+
+For VR, use [Run in VR](#run-in-vr) above. These OS installation steps describe
+the base desktop application and require an appropriate build/package.
 
 Notes:
 
@@ -114,6 +233,9 @@ The builds include an experimental true ultrawide mode: the native renderer draw
 
 ## Building from Source
 
+For the OpenXR game, follow [the VR build section](docs/PCVR_BUILD.md#build-the-openxr-game-on-windows).
+The commands in this section build the ordinary desktop configuration.
+
 All platforms build with CMake 3.25+, Ninja, and Clang 18 or newer - ReXGlue
 requires Clang, so MSVC and Apple Clang are not supported. On Windows, install
 [LLVM for Windows](https://releases.llvm.org/) and Ninja.
@@ -121,7 +243,7 @@ requires Clang, so MSVC and Apple Clang are not supported. On Windows, install
 Clone with submodules:
 
 ```sh
-git clone --recursive <repo-url> skate3recomp
+git clone --recursive --branch main https://github.com/newtonsart/skate3recomp-vr.git skate3recomp
 cd skate3recomp
 ```
 
@@ -293,6 +415,8 @@ needed by this project.
 
 ## Credits
 
+- [Skate3Recomp](https://github.com/mchughalex/skate3recomp) and its contributors,
+  the native recompilation and renderer this VR fork builds on.
 - [rexglue SDK](https://github.com/rexglue/rexglue-sdk), the recompilation SDK
   used by this project.
 - [Xenia](https://github.com/xenia-project/xenia), whose Xbox 360 research and

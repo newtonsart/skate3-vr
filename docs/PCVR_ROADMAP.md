@@ -5,6 +5,9 @@ Native OpenXR stereo gameplay is experimental and has been viewed on Quest 3.
 Several visual corrections remain under validation. Game data is NOT
 distributed. Build notes: [PCVR_BUILD.md](PCVR_BUILD.md).
 
+The current PCVR implementation is published on this fork's `main` branch.
+`vr-development` and the first alpha tag remain historical references.
+
 First playable checkpoint: **PCVR v0.1.0-alpha** (2026-11-02).
 Verified behavior and remaining tests: [PCVR_V0_1_CHECKPOINT.md](PCVR_V0_1_CHECKPOINT.md).
 Subsequent performance improvements and measurements: [PCVR_PERFORMANCE.md](PCVR_PERFORMANCE.md).

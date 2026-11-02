@@ -1,6 +1,6 @@
 # PCVR development
 
-Work takes place on `vr-development`. Experimental native stereo gameplay now
+The fork's `main` branch includes the PCVR implementation. Experimental native stereo gameplay now
 runs on Quest 3. The user has confirmed that the world fuses and that frontend
 menus are visible and the HUD is improved. Complete rear-view visibility across
 levels still requires validation. The user also confirmed a complete, readable
@@ -23,6 +23,48 @@ python cmake/test_extract_game_iso.py
 This supports the XDVDFS partitions recognized by the game's own ISO installer.
 It does not read GOD ZIPs. Supply TU3 using `SKATE3_TITLE_UPDATE_PACKAGE` as
 described in the main README. Keep all retail data and update packages local.
+
+## Build the OpenXR game on Windows
+
+These steps are for a **fresh recursive clone of this fork's `main` branch**,
+with local game data and TU3 prepared as above. Run in an x64 Visual Studio
+developer shell with LLVM/Clang, CMake, Ninja and Python on PATH. Install the
+Vulkan SDK and set `VULKAN_SDK` to its installed directory.
+
+Copy the fully initialized SDK into a new, disposable directory. The OpenXR
+patch refuses a source checkout containing `.git`; keep the original submodule
+and any unrelated local changes intact. In PowerShell, from the repository root:
+
+```powershell
+New-Item -ItemType Directory -Force out | Out-Null
+robocopy third_party/rexglue-sdk out/rexglue-vr /E /XD .git out /XF .git
+if ($LASTEXITCODE -ge 8) { throw "SDK copy failed" }
+git clone --branch release-1.1.54 --depth 1 https://github.com/KhronosGroup/OpenXR-SDK.git out/tools/OpenXR-SDK
+
+$vrArgs = @(
+  "-DCMAKE_C_COMPILER=clang"
+  "-DCMAKE_CXX_COMPILER=clang++"
+  "-DREXSDK_DIR=$PWD/out/rexglue-vr"
+  "-DSKATE3_GAME_DATA_ROOT=$PWD/game"
+  "-DSKATE3_ENABLE_OPENXR=ON"
+  "-DSKATE3_OPENXR_SDK_DIR=$PWD/out/tools/OpenXR-SDK"
+  "-DSKATE3_VULKAN_LIBRARY=$env:VULKAN_SDK/Lib/vulkan-1.lib"
+  "-DSKATE3_GLSLANG=$env:VULKAN_SDK/Bin/glslangValidator.exe"
+)
+cmake --preset relwithdebinfo @vrArgs
+cmake --build --preset relwithdebinfo --target generate-all --parallel 8
+cmake --preset relwithdebinfo @vrArgs
+cmake --build --preset relwithdebinfo --target skate3 skate3-openxr-probe skate3-stereo-math-test skate3-movie-skip-test --parallel 8
+```
+
+Reconfiguration after code generation is required. Keep passing `vrArgs` when
+using the configure preset: its default `REXSDK_DIR` points at the original
+submodule, which the VR patch intentionally refuses. For an already configured
+build, `cmake --build --preset relwithdebinfo --target skate3 --parallel 8` uses
+the cached SDK path. The main README's generic desktop preset does not enable VR.
+
+The original `vr-v0.1.0-alpha` tag remains a historical checkpoint. Current
+settings, pause, window and image-quality work is included on `main`.
 
 ## OpenXR runtime probe
 
