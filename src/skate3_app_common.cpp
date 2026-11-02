@@ -12,6 +12,7 @@
 #include "skate3_user_settings.h"
 #if SKATE3_HAS_OPENXR
 #include "vr/game_vr.h"
+#include "vr/settings_surface.h"
 #include <rex/graphics/vulkan/graphics_system.h>
 #endif
 
@@ -681,6 +682,13 @@ std::optional<rex::PathConfig> Skate3BaseApp::OnFinalizePaths(
 }
 
 void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
+#if SKATE3_HAS_OPENXR
+  drawer->SetDrawMirror([this](rex::ui::UIDrawContext& context) -> rex::ui::UIDrawContext* {
+    if (!simple_settings_dialog_ || !simple_settings_dialog_->visible()) return nullptr;
+    if (!skate3::vr::GameVrEnabled() && !rex::cvar::Query<bool>("skate3_vr_settings_test")) return nullptr;
+    return skate3::vr::BeginSettingsSurface(context);
+  }, [] { skate3::vr::EndSettingsSurface(); });
+#endif
   // Native/emulated corner readout (top right; off by default, cvar
   // skate3_native_render_mode_indicator shows it live). Input-transparent,
   // so it never affects cursor or focus handling.
@@ -750,6 +758,9 @@ void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
 
 void Skate3BaseApp::OnPostSetup() {
 #if SKATE3_HAS_OPENXR
+  skate3::vr::InitializeSettingsSurface();
+  if (rex::cvar::Query<bool>("skate3_vr_settings_test"))
+    app_context().CallInUIThreadDeferred([this] { ToggleSimpleSettings(); });
   if (rex::cvar::Query<bool>("skate3_vr")) {
     rex::ui::RegisterBind("bind_skate3_vr_capture", "Ctrl+F7", "Capture VR stereo images", [] { skate3::vr::CaptureGameVr(); });
     rex::ui::RegisterBind("bind_skate3_vr_recenter", "Ctrl+F8", "Recenter VR view", [] { skate3::vr::RecenterGameVr(); });
@@ -837,6 +848,7 @@ void Skate3BaseApp::OnPreSetup(rex::RuntimeConfig& config) {
 
 void Skate3BaseApp::OnShutdown() {
 #if SKATE3_HAS_OPENXR
+  if (imgui_drawer()) imgui_drawer()->SetDrawMirror({},{});
   rex::ui::UnregisterBind("bind_skate3_vr_recenter");
   rex::ui::UnregisterBind("bind_skate3_vr_capture");
   rex::ui::UnregisterBind("bind_skate3_vr_color");
@@ -862,6 +874,9 @@ void Skate3BaseApp::ToggleSimpleSettings() {
     if (simple_settings_dialog_->visible()) {
       simple_settings_dialog_->Hide();
     } else {
+#if SKATE3_HAS_OPENXR
+      skate3::vr::SetGameVrSettingsVisible(true);
+#endif
       ApplySettingsCursorMode();
       skate3::native_scene::SetSettingsMenuBlur(true);
       simple_settings_dialog_->Show();
@@ -907,6 +922,9 @@ void Skate3BaseApp::ToggleSimpleSettings() {
   // Fires on every Hide (B/Esc, Close Settings, Close Game), the one spot
   // that reliably sees the menu close regardless of who initiated it.
   auto close_settings = [this]() {
+#if SKATE3_HAS_OPENXR
+    skate3::vr::SetGameVrSettingsVisible(false);
+#endif
     skate3::native_scene::SetSettingsMenuBlur(false);
     ApplyGameplayCursorMode();
   };
@@ -959,6 +977,9 @@ void Skate3BaseApp::ToggleSimpleSettings() {
   ApplySettingsCursorMode();
   skate3::native_scene::SetSettingsMenuBlur(true);
   simple_settings_dialog_->Show();
+#if SKATE3_HAS_OPENXR
+  skate3::vr::SetGameVrSettingsVisible(true);
+#endif
 }
 
 void Skate3BaseApp::ToggleNativeDebug() {

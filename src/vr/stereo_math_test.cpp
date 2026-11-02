@@ -2,12 +2,20 @@
 #include "cull_frustum.h"
 #include "gpu_timing.h"
 #include "openxr_passthrough.h"
+#include "presentation.h"
 #include <limits>
 #include <cmath>
 #include <stdexcept>
 
 void Check(bool condition) { if(!condition) throw std::runtime_error("Stereo matrix check failed"); }
 int main() {
+  Check(skate3::vr::CanPresentWorld(true,1'000'000,false,false,true));
+  Check(skate3::vr::CanPresentWorld(true,1'000'000,true,true,true));
+  Check(!skate3::vr::CanPresentWorld(true,1'000'000,true,false,true));
+  Check(!skate3::vr::CanPresentWorld(true,1'000'000,true,true,false));
+  Check(!skate3::vr::CanPresentWorld(false,1'000'000,true,true,true));
+  Check(!skate3::vr::CanPresentWorld(true,250'000'001,true,true,true));
+  Check(!skate3::vr::CanPresentWorld(true,-1,true,true,true));
   // Unsupported passthrough must remain optional and avoid calling XR with
   // null handles, including repeated mode changes and shutdown.
   skate3::vr::OpenXrContext unavailable;
@@ -54,6 +62,19 @@ int main() {
   eye.pose.position.x=0.032f;
   skate3::vr::MakeHudTransform(reference,eye,projection,1.6f,16.0f/9.0f,2.0f,hud);
   Check(hud[2]<0 && hud[1]<hud[0]);
+  eye.pose.position={0,0,0}; eye.pose.orientation={0,0,0,1};
+  skate3::vr::MakeEyeCamera(p,p,camera,reference,eye,2,vp,projection,position,3,1);
+  Check(std::abs(position[0])<1e-5f && std::abs(position[1]-2)<1e-5f && std::abs(position[2]+6)<1e-5f);
+  Check((10*vp[9]+vp[13])/(10*vp[11]+vp[15])<0);
+  float baseline_vp[16],baseline_p[16],baseline_position[3];
+  skate3::vr::MakeEyeCamera(p,p,camera,reference,eye,1,baseline_vp,baseline_p,baseline_position);
+  skate3::vr::MakeEyeCamera(p,p,camera,reference,eye,1,vp,projection,position,0,0);
+  for (int i=0;i<16;++i) Check(vp[i]==baseline_vp[i] && projection[i]==baseline_p[i]);
+  bool bad_camera=false;
+  try { skate3::vr::MakeEyeCamera(p,p,camera,reference,eye,1,vp,projection,position,
+      std::numeric_limits<float>::quiet_NaN(),0); }
+  catch (const std::runtime_error&) { bad_camera=true; }
+  Check(bad_camera);
   const float cull_camera[3]={10,20,30};
   const std::array<float,24> planes={1,0,1,-40, -1,0,1,-20,
       0,-1,1,-10, 0,1,1,-50, 0,0,1,-31, 0,0,-1,130};

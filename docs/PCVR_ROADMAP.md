@@ -28,6 +28,8 @@ Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
 - [x] Hook Vulkan rendering into OpenXR swapchains.
 - [x] Basic per-eye rendering and readable stereo HUD, confirmed on Quest 3.
 - [x] Initial immersive third-person view with independent head orientation.
+- [x] Add headset settings composition, camera offsets and pause-over-world path
+  (compiled and checked with Vulkan; headset validation pending).
 - [ ] Complete comfort limits, camera settings and broader immersive-mode tests.
 - [x] Implement optional stereoscopic window and passthrough composition.
 - [ ] Validate the window and passthrough visually on the headset; Meta settings

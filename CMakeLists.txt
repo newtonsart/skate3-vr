@@ -311,7 +311,7 @@ target_include_directories(skate3 PRIVATE
     ${REXSDK_DIR}/thirdparty/xxHash
 )
 if(SKATE3_ENABLE_OPENXR)
-    target_sources(skate3 PRIVATE src/vr/game_vr.cpp src/vr/stereo_math.cpp)
+    target_sources(skate3 PRIVATE src/vr/game_vr.cpp src/vr/stereo_math.cpp src/vr/settings_surface.cpp)
     find_program(SKATE3_GLSLANG NAMES glslangValidator
         HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
     add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/include/vr_color_spirv.h"
@@ -323,7 +323,7 @@ if(SKATE3_ENABLE_OPENXR)
             "${CMAKE_CURRENT_BINARY_DIR}/include/vr_color_spirv.h"
         DEPENDS src/vr/shaders/color.comp cmake/EmbedSpirv.py VERBATIM)
     target_sources(skate3 PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include/vr_color_spirv.h")
-    set_source_files_properties(src/vr/game_vr.cpp PROPERTIES
+    set_source_files_properties(src/vr/game_vr.cpp src/vr/settings_surface.cpp PROPERTIES
         INCLUDE_DIRECTORIES "${REXSDK_DIR}/thirdparty/renderdoc")
     target_link_libraries(skate3 PRIVATE skate3_openxr)
     target_compile_definitions(skate3 PRIVATE SKATE3_HAS_OPENXR=1)

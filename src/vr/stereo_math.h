@@ -14,5 +14,6 @@ void MakeHudTransform(const XrPosef& head,const XrView& eye,const float projecti
 void MakeEyeCamera(const float game_view_proj[16], const float game_proj[16],
                    const float game_position[3], const XrPosef& reference,
                    const XrView& eye, float world_units_per_meter,
-                   float view_proj[16], float projection[16], float position[3]);
+                   float view_proj[16], float projection[16], float position[3],
+                   float camera_distance=0, float camera_height=0);
 }

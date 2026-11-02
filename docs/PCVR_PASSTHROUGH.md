@@ -18,8 +18,10 @@ Launch the existing OpenXR build with Quest Link active, adding
 - F1 on the PC opens the host settings. Under Video, **VR View** selects the
   mode; **VR Window Width / Distance / Height** adjust the panel in meters.
   These settings apply immediately and are saved in the existing settings file.
-  The host settings themselves appear on the PC; the game's own menus still
-  appear in the headset. Hotkey mode changes are temporary until saved there.
+  In VR these settings also appear as a panel in the headset, over the stereo
+  scene. The default controller shortcut is RB + Start. Camera, HUD and pause
+  options are described in [PCVR_SETTINGS.md](PCVR_SETTINGS.md).
+  Hotkey mode changes are temporary until saved there.
 
 Mode `0` is immersive, `1` is the window against black, and `2` requests room
 view. Without passthrough support or permission, mode 2 retains the stereo

@@ -19,22 +19,32 @@ def apply(sdk):
          "  bool renderer_native_ = true;",
          "  bool renderer_native_ = true;\n"
          "  int vr_mode_ = 0;\n"
-         "  float vr_window_width_ = 2.4f, vr_window_distance_ = 2.0f, vr_window_height_ = 0.0f;")
+         "  float vr_window_width_ = 2.4f, vr_window_distance_ = 2.0f, vr_window_height_ = 0.0f;\n"
+         "  float vr_camera_distance_ = 0, vr_camera_height_ = 0, vr_world_scale_ = 1;\n"
+         "  float vr_hud_width_ = 1.6f, vr_hud_distance_ = 2.0f;\n"
+         "  bool vr_pause_in_world_ = true;")
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          "constexpr std::array<std::string_view, 24> kOptionalSimpleSettingsCvars = {",
-         "constexpr std::array<std::string_view, 28> kOptionalSimpleSettingsCvars = {")
+         "constexpr std::array<std::string_view, 34> kOptionalSimpleSettingsCvars = {")
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          '    "user_language"};',
          '    "user_language",\n'
          '    "skate3_vr_mode",\n'
          '    "skate3_vr_window_width",\n'
          '    "skate3_vr_window_distance",\n'
-         '    "skate3_vr_window_height"};')
+         '    "skate3_vr_window_height",\n'
+         '    "skate3_vr_camera_distance",\n'
+         '    "skate3_vr_camera_height",\n'
+         '    "skate3_vr_world_scale",\n'
+         '    "skate3_vr_hud_width",\n'
+         '    "skate3_vr_hud_distance",\n'
+         '    "skate3_vr_pause_in_world"};')
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          '    case 0: {  // Video\n      header("Display");',
          '''    case 0: {  // Video
       if (HasCvar("skate3_vr_mode") && HasCvar("skate3_vr") &&
-          rex::cvar::Query<bool>("skate3_vr")) {
+          (rex::cvar::Query<bool>("skate3_vr") ||
+           rex::cvar::Query<bool>("skate3_vr_settings_test"))) {
         vr_mode_ = rex::cvar::Query<int32_t>("skate3_vr_mode");
         RowSpec row;
         row.label = "VR View";
@@ -50,29 +60,112 @@ def apply(sdk):
           rex::cvar::SetFlagByName("skate3_vr_mode", std::to_string(value));
           SaveSimpleSettingsConfig(config_path_);
         };
+        row.reset = [this] {
+          vr_mode_ = 0;
+          rex::cvar::SetFlagByName("skate3_vr_mode", "0");
+          SaveSimpleSettingsConfig(config_path_);
+        };
         rows.push_back(std::move(row));
-        auto window_slider = [&](const char* label, const char* name, float* value,
-                                 float minimum, float maximum) {
+        auto vr_slider = [&](const char* label, const char* name, float* value,
+                             float minimum, float maximum, bool enabled,
+                             const char* desc, const char* fmt = "%.1f m") {
           *value = float(rex::cvar::Query<double>(name));
           RowSpec slider;
           slider.kind = RowSpec::kSlider;
           slider.label = label;
-          slider.desc = "Applies immediately to the floating window. Ctrl+F8 recenters it.";
-          slider.enabled = vr_mode_ != 0;
+          slider.desc = desc;
+          slider.enabled = enabled;
           slider.value = value;
           slider.min = minimum; slider.max = maximum;
-          slider.step = 0.1f; slider.fmt = "%.1f m";
+          slider.step = 0.1f; slider.fmt = fmt;
           slider.on_value_change = [this, name, value] {
+            rex::cvar::SetFlagByName(name, std::to_string(*value));
+            SaveSimpleSettingsConfig(config_path_);
+          };
+          slider.reset = [this, name, value] {
+            *value = float(CvarDefaultDouble(name, 0.0));
             rex::cvar::SetFlagByName(name, std::to_string(*value));
             SaveSimpleSettingsConfig(config_path_);
           };
           rows.push_back(std::move(slider));
         };
-        window_slider("VR Window Width", "skate3_vr_window_width", &vr_window_width_, 0.5f, 6.0f);
-        window_slider("VR Window Distance", "skate3_vr_window_distance", &vr_window_distance_, 0.5f, 8.0f);
-        window_slider("VR Window Height", "skate3_vr_window_height", &vr_window_height_, -2.0f, 2.0f);
+        const char* window_desc = "Applies immediately to the floating window. Ctrl+F8 recenters it.";
+        vr_slider("VR Window Width", "skate3_vr_window_width", &vr_window_width_, 0.5f, 6.0f, vr_mode_ != 0, window_desc);
+        vr_slider("VR Window Distance", "skate3_vr_window_distance", &vr_window_distance_, 0.5f, 8.0f, vr_mode_ != 0, window_desc);
+        vr_slider("VR Window Height", "skate3_vr_window_height", &vr_window_height_, -2.0f, 2.0f, vr_mode_ != 0, window_desc);
+        header("VR Camera and HUD");
+        vr_pause_in_world_ = rex::cvar::Query<bool>("skate3_vr_pause_in_world");
+        RowSpec pause;
+        pause.label = "VR Pause View";
+        pause.desc = "Keep the live stereo world and head tracking behind the pause menu. Flat panel is available for compatibility. Loading screens still use their own panel.";
+        pause.options = {"Flat panel", "Menu over 3D world"}; pause.flag = &vr_pause_in_world_;
+        pause.on_enum_change = [this](int value) {
+          vr_pause_in_world_ = value != 0;
+          rex::cvar::SetFlagByName("skate3_vr_pause_in_world", value ? "true" : "false");
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        pause.reset = [this] {
+          vr_pause_in_world_ = true;
+          rex::cvar::SetFlagByName("skate3_vr_pause_in_world", "true");
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        rows.push_back(std::move(pause));
+        vr_slider("VR Camera Distance", "skate3_vr_camera_distance", &vr_camera_distance_, -2.0f, 8.0f, vr_mode_ == 0,
+                  "Moves the immersive camera farther behind the skater. Zero keeps the original follow-camera position. Negative values move closer.");
+        vr_slider("VR Camera Height", "skate3_vr_camera_height", &vr_camera_height_, -2.0f, 4.0f, vr_mode_ == 0,
+                  "Raises or lowers the immersive camera relative to the game's original camera. Zero keeps the original height.");
+        vr_slider("VR World Scale", "skate3_vr_world_scale", &vr_world_scale_, 0.1f, 3.0f, true,
+                  "Game units per physical meter. Changes perceived world size and the response to positional head movement.", "%.1f");
+        vr_slider("VR HUD Width", "skate3_vr_hud_width", &vr_hud_width_, 0.5f, 3.0f, vr_mode_ == 0,
+                  "Width of the immersive HUD. In window mode, the HUD fits the window instead.");
+        vr_slider("VR HUD Distance", "skate3_vr_hud_distance", &vr_hud_distance_, 0.5f, 5.0f, vr_mode_ == 0,
+                  "Comfortable convergence distance of the immersive HUD in front of you.");
+        RowSpec recenter;
+        recenter.kind = RowSpec::kAction; recenter.label = "Recenter VR";
+        recenter.desc = "Look forward and confirm to recenter head tracking and place the window in front of you.";
+        recenter.action = [] { rex::cvar::SetFlagByName("skate3_vr_recenter_requested", "true"); };
+        rows.push_back(std::move(recenter));
       }
       header("Display");''')
+
+    edit("include/rex/ui/imgui_drawer.h", "  void Draw(UIDrawContext& ui_draw_context) override;", """  void Draw(UIDrawContext& ui_draw_context) override;
+  void SetDrawMirror(std::function<UIDrawContext*(UIDrawContext&)> begin,
+                     std::function<void()> end) {
+    mirror_begin_ = std::move(begin); mirror_end_ = std::move(end);
+  }""")
+    edit("include/rex/ui/imgui_drawer.h", "  Presenter* presenter_ = nullptr;", """  Presenter* presenter_ = nullptr;
+  std::function<UIDrawContext*(UIDrawContext&)> mirror_begin_;
+  std::function<void()> mirror_end_;""")
+    edit("src/ui/imgui_drawer.cpp", "    RenderDrawLists(draw_data, ui_draw_context);", """    RenderDrawLists(draw_data, ui_draw_context);
+    if (mirror_begin_ && mirror_end_) {
+      if (auto* mirror = mirror_begin_(ui_draw_context)) {
+        RenderDrawLists(draw_data, *mirror);
+        mirror_end_();
+      }
+    }""")
+    edit("include/rex/ui/vulkan/presenter.h", "class VulkanPresenter final : public Presenter {\n public:", """class VulkanPresenter final : public Presenter {
+ public:
+  struct UiMirrorHooks {
+    void* user = nullptr;
+    VkCommandBuffer (*commands)(void*) = nullptr;
+    void (*submitted)(void*, VkFence, VkResult) = nullptr;
+  };
+  // UI thread only. The extra pass shares the parent's upload lifetime/fence.
+  static void SetUiMirrorHooks(UiMirrorHooks hooks);""")
+    edit("src/ui/vulkan/vulkan_presenter.cpp", "struct VulkanPresentTimingStats {", """VulkanPresenter::UiMirrorHooks ui_mirror_hooks;
+struct VulkanPresentTimingStats {""")
+    edit("src/ui/vulkan/vulkan_presenter.cpp", "bool VulkanPresenter::CaptureGuestOutput(RawImage& image_out)", """void VulkanPresenter::SetUiMirrorHooks(UiMirrorHooks hooks) { ui_mirror_hooks = hooks; }
+
+bool VulkanPresenter::CaptureGuestOutput(RawImage& image_out)""")
+    edit("src/ui/vulkan/vulkan_presenter.cpp", "  VkCommandBuffer command_buffers[2];", "  VkCommandBuffer command_buffers[3];")
+    edit("src/ui/vulkan/vulkan_presenter.cpp", "  command_buffers[command_buffer_count++] = draw_command_buffer;", """  command_buffers[command_buffer_count++] = draw_command_buffer;
+  VkCommandBuffer mirror_command = execute_ui_drawers && ui_mirror_hooks.commands
+      ? ui_mirror_hooks.commands(ui_mirror_hooks.user) : VK_NULL_HANDLE;
+  if (mirror_command) command_buffers[command_buffer_count++] = mirror_command;""")
+    edit("src/ui/vulkan/vulkan_presenter.cpp", "    if (submit_result != VK_SUCCESS) {\n      REXLOG_ERROR(\"VulkanPresenter: Failed to submit command buffers ({})\",", """    if (mirror_command && ui_mirror_hooks.submitted)
+      ui_mirror_hooks.submitted(ui_mirror_hooks.user, fence_acqusition.fence(), submit_result);
+    if (submit_result != VK_SUCCESS) {
+      REXLOG_ERROR("VulkanPresenter: Failed to submit command buffers ({})",""")
 
     edit("include/rex/ui/vulkan/instance.h", "class VulkanInstance {", """// OpenXR interop: installed before graphics creation, immutable while in use.
 struct RuntimeHooks {

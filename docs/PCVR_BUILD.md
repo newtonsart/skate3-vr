@@ -89,8 +89,11 @@ Configure the game with `SKATE3_ENABLE_OPENXR=ON`, `SKATE3_OPENXR_SDK_DIR`,
 `SKATE3_VULKAN_LIBRARY` and `SKATE3_GLSLANG` (the Vulkan SDK's
 `glslangValidator.exe`). Launch with `--gpu_backend=vulkan --skate3_vr=true`.
 Ctrl+F8 recenters the headset. The original gamepad remains the gameplay input.
-Frontend and pause UI use the emulated menu image on a view-relative 16:9 panel;
-gameplay uses independently rendered eye projections. The optional stereoscopic
+Frontend/loading UI uses a view-relative panel. The in-game pause now keeps a
+fresh stereo world behind its captured menu, with a flat compatibility option;
+this new pause path still needs headset validation. Settings are also composited
+into the headset; see [PCVR_SETTINGS.md](PCVR_SETTINGS.md).
+Gameplay uses independently rendered eye projections. The optional stereoscopic
 window and passthrough modes are described in [PCVR_PASSTHROUGH.md](PCVR_PASSTHROUGH.md).
 
 `skate3_vr_linear_color` defaults to true after isolated headset validation.

@@ -105,8 +105,10 @@ void MakeHudTransform(const XrPosef& head,const XrView& eye,const float* project
 }
 void MakeEyeCamera(const float* vp,const float* proj,const float* camera,
                    const XrPosef& reference,const XrView& eye,float scale,
-                   float* output,float* projection,float* position) {
+                   float* output,float* projection,float* position,float camera_distance,float camera_height) {
   if(!std::isfinite(scale) || scale<=0) throw std::runtime_error("Invalid VR world scale");
+  if (!std::isfinite(camera_distance) || !std::isfinite(camera_height))
+    throw std::runtime_error("Invalid VR camera offset");
   float inverse[16],view[16]; Invert(proj,inverse); Multiply(vp,inverse,view);
   // Skate's +Z-forward camera has negative projection X. OpenXR is -Z-forward.
   // Keep world +Y upright and remove the game's camera pitch/roll.
@@ -119,7 +121,7 @@ void MakeEyeCamera(const float* vp,const float* proj,const float* camera,
   const auto rotation=Mul(invq,eye.pose.orientation);
   const auto offset=Rotate(invq,{eye.pose.position.x-reference.position.x,
       eye.pose.position.y-reference.position.y,eye.pose.position.z-reference.position.z});
-  const float delta[3]={offset.x,offset.y,offset.z};
+  const float delta[3]={offset.x,offset.y+camera_height,offset.z+camera_distance};
   for(int k=0;k<3;++k) {
     position[k]=camera[k];
     for(int a=0;a<3;++a) position[k]+=delta[a]*basis[a][k]*scale;

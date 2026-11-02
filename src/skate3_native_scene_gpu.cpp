@@ -60,6 +60,7 @@
 #include "skate3_native_scene_gpu_internal.h"
 #if SKATE3_HAS_OPENXR
 #include "vr/game_vr.h"
+#include "vr/presentation.h"
 #endif
 
 // Cvars defined in skate3_native_scene.cpp (and SDK cvars re-declared there).
@@ -11639,11 +11640,15 @@ void Install() {
         std::shared_ptr<const FrameScene> scene;
         { std::lock_guard lock(g_scene_mutex); scene = g_scene; }
         if (skate3::vr::GameVrEnabled()) {
+          static bool seen_gameplay=false;
+          const bool in_menus=rex::kernel::guest_presence::GameplayContextValue()==0;
+          if (!in_menus) seen_gameplay=true;
           rex::graphics::RequestNativeGuestOutputPostProcess(true);
           const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
               PerfClock::now().time_since_epoch()).count();
-          if (!scene || scene->items.empty() || now - g_last_publish_ns.load() > 250000000 ||
-              rex::kernel::guest_presence::GameplayContextValue() == 0)
+          if (!skate3::vr::CanPresentWorld(scene && !scene->items.empty(),
+              now-g_last_publish_ns.load(),in_menus,
+              rex::cvar::Query<bool>("skate3_vr_pause_in_world"),seen_gameplay))
             return false;
         }
         return skate3::vr::RenderStereo(context, std::move(scene), &RenderScene);

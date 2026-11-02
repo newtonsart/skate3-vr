@@ -26,6 +26,7 @@ void ToggleGameVrColor();
 void ToggleGameVrCulling();
 void CycleGameVrMode();
 bool GameVrEnabled();
+void SetGameVrSettingsVisible(bool visible);
 void PresentFlatMenu(const rex::graphics::NativeGuestOutputRenderContext& context);
 bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& context,
                   std::shared_ptr<const native_scene::FrameScene> scene,

@@ -9,6 +9,7 @@
 #include "openxr_context.h"
 #include "openxr_session.h"
 #include "openxr_passthrough.h"
+#include "settings_surface.h"
 #include "stereo_math.h"
 #include "cull_frustum.h"
 #include "gpu_timing.h"
@@ -17,10 +18,12 @@
 #include <openxr/openxr_platform.h>
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/kernel/guest_presence.h>
 #include <rex/graphics/vulkan/native_rhi_vulkan.h>
 #include <rex/ui/vulkan/device.h>
 #include <rex/ui/vulkan/instance.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -33,6 +36,12 @@
 REXCVAR_DEFINE_BOOL(skate3_vr, false, "VR", "Experimental native OpenXR stereo rendering")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_world_scale, 1.0, "VR", "Game units per physical meter");
+REXCVAR_DEFINE_DOUBLE(skate3_vr_camera_distance, 0.0, "VR", "Additional immersive camera distance in meters").range(-2.0,8.0);
+REXCVAR_DEFINE_DOUBLE(skate3_vr_camera_height, 0.0, "VR", "Additional immersive camera height in meters").range(-2.0,4.0);
+REXCVAR_DEFINE_BOOL(skate3_vr_recenter_requested, false, "VR", "Recenter on the next tracked frame");
+REXCVAR_DEFINE_BOOL(skate3_vr_pause_in_world, true, "VR", "Keep stereo world rendering behind the pause menu");
+REXCVAR_DEFINE_BOOL(skate3_vr_settings_test, false, "VR", "Open and exercise the VR settings surface without a headset")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly).debug_only();
 REXCVAR_DEFINE_INT32(skate3_vr_mode, 0, "VR", "0: immersive, 1: stereo window, 2: stereo window with room view").range(0,2);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_width, 2.4, "VR", "Stereo window width in meters").range(0.5,6.0);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_distance, 2.0, "VR", "Stereo window distance in meters").range(0.5,8.0);
@@ -77,6 +86,8 @@ struct State {
   std::unique_ptr<OpenXrSession> session;
   std::unique_ptr<OpenXrPassthrough> room;
   int last_mode=-1;
+  bool settings_presented=false;
+  float settings_aspect=16.0f/9;
   rex::ui::vulkan::VulkanDevice* gpu=nullptr;
   VkDevice device=VK_NULL_HANDLE;
   VkCommandPool pool=VK_NULL_HANDLE;
@@ -93,7 +104,7 @@ struct State {
   VkSampler sampler=VK_NULL_HANDLE;
   VkPipelineLayout pipeline_layout=VK_NULL_HANDLE;
   VkPipeline pipeline=VK_NULL_HANDLE;
-  EyeSwapchain eyes[2];
+  EyeSwapchain eyes[3];
   XrPosef reference{};
   bool recentered=false;
   bool failed=false;
@@ -145,8 +156,10 @@ struct State {
           (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {format=candidate;break;}
     }
     if(format==VK_FORMAT_UNDEFINED) throw std::runtime_error("No XR swapchain linear storage format");
-    for(int e=0;e<2;++e) {
-      auto& eye=eyes[e]; eye.width=xr.views()[e].recommendedImageRectWidth; eye.height=xr.views()[e].recommendedImageRectHeight;
+    for(int e=0;e<3;++e) {
+      auto& eye=eyes[e];
+      eye.width=e==2 ? 1920 : xr.views()[e].recommendedImageRectWidth;
+      eye.height=e==2 ? 1080 : xr.views()[e].recommendedImageRectHeight;
       XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
       info.usageFlags=XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT|XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
       info.format=format; info.sampleCount=1; info.width=eye.width; info.height=eye.height;
@@ -308,8 +321,9 @@ struct State {
     if (++perf_samples==600) REXLOG_INFO("VR: desktop shared-work comparison complete (600 samples)");
     return true;
   }
-  void Transfer(const NativeGuestOutputRenderContext& context,int e,bool capture) {
+  void Transfer(const NativeGuestOutputRenderContext& context,int e,bool capture,const SettingsImage* settings=nullptr) {
     auto& eye=eyes[e]; uint32_t index=0;
+    const bool profile=timing && e<2;
     XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     {
       auto queue=gpu->AcquireQueue(gpu->queue_family_graphics_compute(),0);
@@ -321,12 +335,14 @@ struct State {
       XrCheck(xrWaitSwapchainImage(eye.handle,&wait),"Wait eye image"); waited=true;
       if(!vulkan::NativeRhiFlushForExternal(context.device)) throw std::runtime_error("Game GPU submission failed");
       if(capture) PrepareCapture(VkDeviceSize(context.guest_output_width)*context.guest_output_height*4);
-      auto image=vulkan::NativeRhiGetImage(context.guest_output);
-      const bool linear=REXCVAR_GET(skate3_vr_linear_color);
+      auto image=settings ? vulkan::NativeVulkanImage{settings->image,settings->view} : vulkan::NativeRhiGetImage(context.guest_output);
+      const uint32_t source_width=settings ? settings->width : context.guest_output_width;
+      const uint32_t source_height=settings ? settings->height : context.guest_output_height;
+      const bool linear=REXCVAR_GET(skate3_vr_linear_color) && !(settings && settings->srgb);
       VkCheck(vkResetCommandBuffer(command,0),"Reset XR command buffer");
       VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
       VkCheck(vkBeginCommandBuffer(command,&begin),"Begin XR transfer");
-      if (timing) {
+      if (profile) {
         vkCmdResetQueryPool(command,timing,4+e*2,2);
         vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,timing,4+e*2);
       }
@@ -361,7 +377,7 @@ struct State {
           eye.images[index].image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
       } else {
         VkImageBlit blit{}; blit.srcSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; blit.dstSubresource=blit.srcSubresource;
-        blit.srcOffsets[1]={int32_t(context.guest_output_width),int32_t(context.guest_output_height),1};
+        blit.srcOffsets[1]={int32_t(source_width),int32_t(source_height),1};
         blit.dstOffsets[1]={int32_t(eye.width),int32_t(eye.height),1};
         vkCmdBlitImage(command,image.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,eye.images[index].image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,VK_FILTER_LINEAR);
       }
@@ -382,14 +398,14 @@ struct State {
       barriers[1].oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barriers[1].newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
       barriers[1].srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT; barriers[1].dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
       vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,0,nullptr,0,nullptr,2,barriers);
-      if (timing) vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timing,5+e*2);
+      if (profile) vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timing,5+e*2);
       VkCheck(vkEndCommandBuffer(command),"End XR transfer");
       VkCheck(vkResetFences(device,1,&fence),"Reset XR fence");
       VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount=1; submit.pCommandBuffers=&command;
       { auto queue=gpu->AcquireQueue(gpu->queue_family_graphics_compute(),0); VkCheck(vkQueueSubmit(queue.queue(),1,&submit,fence),"Submit XR transfer"); }
       // Correctness baseline: all writes finish before handing ownership to XR.
       VkCheck(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"Complete XR transfer");
-      if (timing) {
+      if (profile) {
         gpu_render_ms[e]=ReadGpuDuration(e*2);
         gpu_copy_ms[e]=ReadGpuDuration(4+e*2);
       }
@@ -412,6 +428,7 @@ struct State {
 };
 std::mutex mutex;
 std::unique_ptr<State> state;
+std::atomic<bool> settings_visible{false};
 std::mutex cull_camera_mutex;
 float cull_camera[3]{};
 std::chrono::steady_clock::time_point cull_camera_time{};
@@ -456,6 +473,7 @@ void InitializeGameVr() {
 }
 void ShutdownGameVr() {
   std::lock_guard lock(mutex);
+  ShutdownSettingsSurface(); settings_visible=false;
   rex::ui::vulkan::SetRuntimeHooks({}); state.reset();
 }
 void RecenterGameVr() {
@@ -492,6 +510,7 @@ void CycleGameVrMode() {
   rex::cvar::SetFlagByName("skate3_vr_mode",std::to_string(mode));
 }
 bool GameVrEnabled() { return REXCVAR_GET(skate3_vr); }
+void SetGameVrSettingsVisible(bool visible) { settings_visible=visible; }
 void PresentFlatMenu(const rex::graphics::NativeGuestOutputRenderContext& context) {
   RenderStereo(context, nullptr, [](const auto&, void*) { return true; });
 }
@@ -526,6 +545,10 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     if(!frame.should_render || (frame.view_flags&valid)!=valid) {
       s.session->EndFrame(frame); begun=false; return s.BenchmarkDesktop(input,scene,render);
     }
+    if (REXCVAR_GET(skate3_vr_recenter_requested)) {
+      s.recentered=false;
+      rex::cvar::SetFlagByName("skate3_vr_recenter_requested","false");
+    }
     if(!s.recentered) { s.reference=RecenterPose(frame.head.pose); s.recentered=true; }
     if (mode==2) {
       const bool active=s.room->Enable();
@@ -539,11 +562,13 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     const float window_distance=float(REXCVAR_GET(skate3_vr_window_distance));
     const float window_height=float(REXCVAR_GET(skate3_vr_window_height));
     const float aspect=float(input.guest_output_width)/float(input.guest_output_height);
+    const bool pause_menu=scene && rex::kernel::guest_presence::GameplayContextValue()==0;
     if (window && !(window_width>=0.5f && window_width<=6 &&
         window_distance>=0.5f && window_distance<=8 && window_height>=-2 && window_height<=2 &&
         aspect>0 && aspect<=10)) throw std::runtime_error("Invalid VR window size/position");
+    if (!settings_visible.load()) s.settings_presented=false;
     XrCompositionLayerProjectionView projections[2]={{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
-    bool rendered=false,world_rendered=false;
+    bool rendered=false,world_rendered=false,eye_world[2]{};
     auto context=input;
     const auto image=vulkan::NativeRhiGetImage(input.guest_output);
     const auto start=std::chrono::steady_clock::now();
@@ -571,10 +596,11 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
               float(REXCVAR_GET(skate3_vr_world_scale)),window_width,aspect,window_distance,window_height,
               camera.view_proj,camera.proj,camera.position);
         } else {
-          MakeEyeCamera(scene->view_proj,scene->proj,scene->cam_pos,s.reference,frame.eyes[eye],float(REXCVAR_GET(skate3_vr_world_scale)),camera.view_proj,camera.proj,camera.position);
+          MakeEyeCamera(scene->view_proj,scene->proj,scene->cam_pos,s.reference,frame.eyes[eye],float(REXCVAR_GET(skate3_vr_world_scale)),camera.view_proj,camera.proj,camera.position,
+              float(REXCVAR_GET(skate3_vr_camera_distance)),float(REXCVAR_GET(skate3_vr_camera_height)));
           MakeHudTransform(frame.head.pose,frame.eyes[eye],camera.proj,
-              float(REXCVAR_GET(skate3_vr_hud_width)),aspect,
-              float(REXCVAR_GET(skate3_vr_hud_distance)),camera.hud_transform);
+              float(pause_menu ? REXCVAR_GET(skate3_vr_menu_width) : REXCVAR_GET(skate3_vr_hud_width)),aspect,
+              float(pause_menu ? REXCVAR_GET(skate3_vr_menu_distance) : REXCVAR_GET(skate3_vr_hud_distance)),camera.hud_transform);
         }
         camera.override_camera=true;
         if(capture) {
@@ -586,7 +612,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       if (s.timing) vulkan::NativeRhiTimestamp(context.device,s.timing,eye*2,true);
       rendered=render(context,&camera);
       if (s.timing) vulkan::NativeRhiTimestamp(context.device,s.timing,eye*2+1,false);
-      world_rendered=world_rendered || camera.override_camera;
+      eye_world[eye]=camera.override_camera;
       render_ms[eye]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-render_start).count();
       if (!eye) render_ms[eye]+=shared_scene_copy_ms;
       scene_copy_ms[eye]+=camera.scene_copy_ms;
@@ -604,17 +630,21 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       render_ms[0]+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-release_start).count();
     }
     if(rendered) {
+      // A transition can invalidate the world between eyes. Submit the flat
+      // image to both eyes instead of mixing a world eye and a loading eye.
+      world_rendered=eye_world[0] && eye_world[1];
+      const int flat_eye=eye_world[0] && !eye_world[1] ? 1 : 0;
       if(capture && !s.capture_menu) { s.capture_done=true; REXLOG_INFO("VR: stereo capture same-scene={} distinct-pixels={}",scene->generation,s.eye_hashes[0]!=s.eye_hashes[1]); }
       XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION}; layer.space=s.session->local_space(); layer.viewCount=2; layer.views=projections;
       XrCompositionLayerQuad menu{XR_TYPE_COMPOSITION_LAYER_QUAD};
       menu.space=s.session->view_space(); menu.eyeVisibility=XR_EYE_VISIBILITY_BOTH;
-      menu.subImage=projections[0].subImage; menu.pose.orientation.w=1;
+      menu.subImage=projections[flat_eye].subImage; menu.pose.orientation.w=1;
       const float distance=float(REXCVAR_GET(skate3_vr_menu_distance));
       const float width=float(REXCVAR_GET(skate3_vr_menu_width));
       if(!(distance>=0.5f && distance<=10 && width>=0.5f && width<=10)) throw std::runtime_error("Invalid VR menu size/distance");
       menu.pose.position.z=-distance;
       menu.size={width,width*float(context.guest_output_height)/float(context.guest_output_width)};
-      const XrCompositionLayerBaseHeader* layers[3]{};
+      const XrCompositionLayerBaseHeader* layers[4]{};
       uint32_t layer_count=0;
       XrCompositionLayerPassthroughFB background{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
       if (mode==2 && s.room->layer()) {
@@ -630,13 +660,30 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
           panel.space=s.session->local_space(); panel.pose=pose;
           panel.size={window_width,window_width/aspect};
           panel.eyeVisibility=world_rendered ? (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT) : XR_EYE_VISIBILITY_BOTH;
-          panel.subImage=projections[eye].subImage;
+          panel.subImage=projections[world_rendered ? eye : flat_eye].subImage;
           layers[layer_count++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&panel);
         }
       } else {
         layers[layer_count++]=world_rendered
             ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer)
             : reinterpret_cast<const XrCompositionLayerBaseHeader*>(&menu);
+      }
+      XrCompositionLayerQuad settings_panel{XR_TYPE_COMPOSITION_LAYER_QUAD};
+      if (settings_visible.load()) {
+        SettingsImage settings;
+        auto reading=TryReadSettingsSurface(settings);
+        if (reading) {
+          s.Transfer(context,2,false,&settings);
+          s.settings_presented=true; s.settings_aspect=float(settings.width)/settings.height;
+        }
+        if (s.settings_presented) {
+          settings_panel.space=s.session->view_space(); settings_panel.eyeVisibility=XR_EYE_VISIBILITY_BOTH;
+          settings_panel.subImage.swapchain=s.eyes[2].handle;
+          settings_panel.subImage.imageRect.extent={int32_t(s.eyes[2].width),int32_t(s.eyes[2].height)};
+          settings_panel.pose.orientation.w=1; settings_panel.pose.position.z=-2;
+          settings_panel.size={2.4f,2.4f/s.settings_aspect};
+          layers[layer_count++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&settings_panel);
+        }
       }
       s.session->EndFrame(frame,layer_count,layers); begun=false;
       if (compare && world_rendered && scene && scene->generation>300 && scene->items.size()>100 && !capture) {
