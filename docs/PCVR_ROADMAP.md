@@ -18,7 +18,7 @@ Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
 
 ## Milestones
 - [x] Windows build and Vulkan initialization using local game assets (visual/gameplay validation pending).
-- [ ] Check PC OpenXR runtime and Quest Link headset tracking.
+- [x] Check PC OpenXR runtime and Quest Link headset tracking (standalone Vulkan session).
 - [ ] Hook Vulkan rendering into OpenXR swapchains.
 - [ ] Render two correct eye views and maintain stereo HUD readability.
 - [ ] Implement immersive third-person VR mode.
@@ -72,14 +72,30 @@ https://github.com/mchughalex/rexglue-skate3/pull/18.
   expected values. Packages and extracted files stay ignored by Git.
 - Built and linked `skate3-openxr-probe` against the official OpenXR 1.1.54
   loader. Created a real OpenXR instance using `XR_KHR_vulkan_enable2` on
-  the installed Oculus runtime. `xrGetSystem` returns
-  `XR_ERROR_FORM_FACTOR_UNAVAILABLE` (-35), so headset availability, Vulkan
-  graphics requirements, session creation and tracking remain unverified.
+  the installed Oculus runtime. Initially `xrGetSystem` returned
+  `XR_ERROR_FORM_FACTOR_UNAVAILABLE` (-35); enabling Quest Link resolved it.
 - The OpenXR module owns instance cleanup, enumerates required extensions,
   queries stereo-view dimensions and Vulkan requirements when a headset is
   available, and reports failures with nonzero exit status.
 
-All full VR milestones remain pending. No stereo
+## Milestone 2 — verified headset session (2026-11-02)
+
+- Detected Meta Quest 3 through Oculus with recommended 2272x2464 images per eye.
+- Runtime requirements report Vulkan 1.0 minimum / 1.2 highest tested. A real
+  Vulkan 1.3 instance and device, created through `XR_KHR_vulkan_enable2`,
+  successfully created a stereo session on the runtime-selected RTX 4080.
+- Added `openxr_session.{h,cpp}` with dependency-ordered resource cleanup,
+  session events, LOCAL/VIEW reference spaces, predicted frame pacing and
+  head/eye pose location. Added `--track` to the native diagnostic executable.
+- First ten-second hardware test: 901 frames, 901 valid 6DoF head poses,
+  901 tracked head poses, 901 valid stereo pose pairs, 823 renderable frames.
+  Display period: 11.111 ms (90 Hz); head translation varied by 0.1336 m on X.
+  This validates tracking, not 90 FPS game rendering or GPU image submission.
+- Next: extend ReXGlue's Vulkan creation/image-import/submission interfaces
+  and bind the same graphics device to gameplay and OpenXR swapchains. The
+  standalone diagnostic's device is not shared with the running game.
+
+No stereo
 swapchains, eye rendering, VR camera modes or VR HUD are connected to gameplay.
 
 Original project's history and credits are retained.

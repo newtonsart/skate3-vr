@@ -1,0 +1,178 @@
+#include "openxr_session.h"
+#define XR_USE_GRAPHICS_API_VULKAN
+#include <openxr/openxr_platform.h>
+
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace skate3::vr {
+namespace {
+void Check(XrResult result, const char* operation) {
+  if (XR_FAILED(result)) throw std::runtime_error(std::string(operation) +
+      " failed: XrResult=" + std::to_string(result));
+}
+void CheckVk(VkResult result, const char* operation) {
+  if (result != VK_SUCCESS) throw std::runtime_error(std::string(operation) +
+      " failed: VkResult=" + std::to_string(result));
+}
+template <typename Function>
+Function Load(XrInstance instance, const char* name) {
+  PFN_xrVoidFunction function = nullptr;
+  Check(xrGetInstanceProcAddr(instance, name, &function), name);
+  if (!function) throw std::runtime_error(std::string("Missing function: ") + name);
+  return reinterpret_cast<Function>(function);
+}
+}  // namespace
+
+OpenXrSession::OpenXrSession(const OpenXrContext& context) : context_(context) {}
+OpenXrSession::~OpenXrSession() { Destroy(); }
+
+void OpenXrSession::Destroy() {
+  if (device_) vkDeviceWaitIdle(device_);
+  if (view_) xrDestroySpace(view_);
+  if (local_) xrDestroySpace(local_);
+  if (session_) xrDestroySession(session_);
+  if (device_) vkDestroyDevice(device_, nullptr);
+  if (vk_instance_) vkDestroyInstance(vk_instance_, nullptr);
+  view_ = local_ = XR_NULL_HANDLE;
+  session_ = XR_NULL_HANDLE;
+  device_ = VK_NULL_HANDLE;
+  vk_instance_ = VK_NULL_HANDLE;
+  running_ = false;
+}
+
+void OpenXrSession::Create(uint32_t api_version) {
+  if (vk_instance_ || !context_.system()) throw std::logic_error("Invalid session initialization");
+  try {
+    const auto instance = context_.instance();
+    const auto system = context_.system();
+    VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    app.pApplicationName = "Skate3Recomp VR";
+    app.apiVersion = api_version;
+    VkInstanceCreateInfo vk_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    vk_info.pApplicationInfo = &app;
+    XrVulkanInstanceCreateInfoKHR info{XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR};
+    info.systemId = system;
+    info.pfnGetInstanceProcAddr = vkGetInstanceProcAddr;
+    info.vulkanCreateInfo = &vk_info;
+    VkResult vk_result = VK_SUCCESS;
+    Check(Load<PFN_xrCreateVulkanInstanceKHR>(instance, "xrCreateVulkanInstanceKHR")(
+        instance, &info, &vk_instance_, &vk_result), "Create XR Vulkan instance");
+    CheckVk(vk_result, "Create Vulkan instance");
+    XrVulkanGraphicsDeviceGetInfoKHR gpu_info{XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR};
+    gpu_info.systemId = system;
+    gpu_info.vulkanInstance = vk_instance_;
+    Check(Load<PFN_xrGetVulkanGraphicsDevice2KHR>(instance, "xrGetVulkanGraphicsDevice2KHR")(
+        instance, &gpu_info, &physical_device_), "Select runtime GPU");
+    vkGetPhysicalDeviceProperties(physical_device_, &gpu_properties_);
+    if (gpu_properties_.apiVersion < api_version) throw std::runtime_error("GPU lacks requested Vulkan API");
+    uint32_t count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &count, nullptr);
+    std::vector<VkQueueFamilyProperties> queues(count);
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &count, queues.data());
+    uint32_t family = 0;
+    while (family < count && !(queues[family].queueFlags & VK_QUEUE_GRAPHICS_BIT)) ++family;
+    if (family == count) throw std::runtime_error("No graphics queue on runtime GPU");
+    float priority = 1.0f;
+    VkDeviceQueueCreateInfo queue{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+    queue.queueFamilyIndex = family;
+    queue.queueCount = 1;
+    queue.pQueuePriorities = &priority;
+    VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    device_info.queueCreateInfoCount = 1;
+    device_info.pQueueCreateInfos = &queue;
+    XrVulkanDeviceCreateInfoKHR xr_device{XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR};
+    xr_device.systemId = system;
+    xr_device.pfnGetInstanceProcAddr = vkGetInstanceProcAddr;
+    xr_device.vulkanPhysicalDevice = physical_device_;
+    xr_device.vulkanCreateInfo = &device_info;
+    Check(Load<PFN_xrCreateVulkanDeviceKHR>(instance, "xrCreateVulkanDeviceKHR")(
+        instance, &xr_device, &device_, &vk_result), "Create XR Vulkan device");
+    CheckVk(vk_result, "Create Vulkan device");
+    XrGraphicsBindingVulkan2KHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR};
+    binding.instance = vk_instance_;
+    binding.physicalDevice = physical_device_;
+    binding.device = device_;
+    binding.queueFamilyIndex = family;
+    binding.queueIndex = 0;
+    XrSessionCreateInfo session{XR_TYPE_SESSION_CREATE_INFO};
+    session.next = &binding;
+    session.systemId = system;
+    Check(xrCreateSession(instance, &session, &session_), "Create Vulkan XR session");
+    XrReferenceSpaceCreateInfo space{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+    space.poseInReferenceSpace.orientation.w = 1.0f;
+    space.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    Check(xrCreateReferenceSpace(session_, &space, &local_), "Create local space");
+    space.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+    Check(xrCreateReferenceSpace(session_, &space, &view_), "Create head space");
+  } catch (...) {
+    Destroy();
+    throw;
+  }
+}
+
+bool OpenXrSession::PollEvents() {
+  XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+  for (;;) {
+    const auto result = xrPollEvent(context_.instance(), &event);
+    if (result == XR_EVENT_UNAVAILABLE) break;
+    Check(result, "Poll XR event");
+    if (event.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) exiting_ = true;
+    if (event.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
+      const auto& change = reinterpret_cast<const XrEventDataSessionStateChanged&>(event);
+      if (change.session == session_) {
+        state_ = change.state;
+        if (state_ == XR_SESSION_STATE_READY && !running_) {
+          XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO};
+          begin.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+          Check(xrBeginSession(session_, &begin), "Begin stereo session");
+          running_ = true;
+        } else if (state_ == XR_SESSION_STATE_STOPPING && running_) {
+          Check(xrEndSession(session_), "End session");
+          running_ = false;
+        } else if (state_ == XR_SESSION_STATE_EXITING || state_ == XR_SESSION_STATE_LOSS_PENDING) {
+          exiting_ = true;
+        }
+      }
+    }
+    event = {XR_TYPE_EVENT_DATA_BUFFER};
+  }
+  return !exiting_;
+}
+
+bool OpenXrSession::SampleTracking(TrackingFrame& frame) {
+  if (!running_ || exiting_) return false;
+  XrFrameWaitInfo wait{XR_TYPE_FRAME_WAIT_INFO};
+  XrFrameState state{XR_TYPE_FRAME_STATE};
+  Check(xrWaitFrame(session_, &wait, &state), "Wait predicted frame");
+  XrFrameBeginInfo begin{XR_TYPE_FRAME_BEGIN_INFO};
+  Check(xrBeginFrame(session_, &begin), "Begin frame");
+  frame = {};
+  frame.display_time = state.predictedDisplayTime;
+  frame.display_period = state.predictedDisplayPeriod;
+  frame.should_render = state.shouldRender == XR_TRUE;
+  auto head_result = xrLocateSpace(view_, local_, state.predictedDisplayTime, &frame.head);
+  XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
+  locate.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+  locate.displayTime = state.predictedDisplayTime;
+  locate.space = local_;
+  XrViewState views{XR_TYPE_VIEW_STATE};
+  uint32_t count = 0;
+  auto eyes_result = xrLocateViews(session_, &locate, &views, 2, &count, frame.eyes);
+  frame.view_flags = views.viewStateFlags;
+  XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
+  end.displayTime = state.predictedDisplayTime;
+  end.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+  auto end_result = xrEndFrame(session_, &end);
+  Check(head_result, "Locate head pose");
+  Check(eyes_result, "Locate stereo eye poses");
+  Check(end_result, "End tracking-only frame");
+  if (count != 2) throw std::runtime_error("Runtime returned incorrect eye count");
+  return true;
+}
+
+void OpenXrSession::RequestExit() {
+  if (running_) Check(xrRequestExitSession(session_), "Request session exit");
+}
+}  // namespace skate3::vr

@@ -11,12 +11,14 @@ set(BUILD_CONFORMANCE_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_SDK_TESTS OFF CACHE BOOL "" FORCE)
 set(DYNAMIC_LOADER OFF CACHE BOOL "" FORCE)
 add_subdirectory("${SKATE3_OPENXR_SDK_DIR}" openxr-sdk EXCLUDE_FROM_ALL)
-add_library(skate3_openxr STATIC openxr_context.cpp)
+add_library(skate3_openxr STATIC openxr_context.cpp openxr_session.cpp)
 find_path(SKATE3_VULKAN_INCLUDE_DIR vulkan/vulkan.h
     HINTS "${CMAKE_CURRENT_LIST_DIR}/../../third_party/rexglue-sdk/thirdparty/vulkan-headers/include"
     REQUIRED)
-target_include_directories(skate3_openxr PRIVATE "${SKATE3_VULKAN_INCLUDE_DIR}")
+target_include_directories(skate3_openxr PUBLIC "${SKATE3_VULKAN_INCLUDE_DIR}")
+find_library(SKATE3_VULKAN_LIBRARY NAMES vulkan-1 vulkan
+    HINTS "$ENV{VULKAN_SDK}/Lib" REQUIRED)
 target_include_directories(skate3_openxr PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(skate3_openxr PUBLIC OpenXR::openxr_loader)
+target_link_libraries(skate3_openxr PUBLIC OpenXR::openxr_loader "${SKATE3_VULKAN_LIBRARY}")
 add_executable(skate3-openxr-probe openxr_probe.cpp)
 target_link_libraries(skate3-openxr-probe PRIVATE skate3_openxr)

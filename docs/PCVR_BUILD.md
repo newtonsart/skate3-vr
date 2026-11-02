@@ -1,8 +1,8 @@
 # PCVR development
 
 Work takes place on `vr-development`. No playable VR integration is available
-yet. The OpenXR probe checks the actual installed runtime; it does not render
-the game or validate tracking.
+yet. The OpenXR probe checks the actual installed runtime and can verify a
+Vulkan session with predicted head/eye tracking. It does not render the game.
 
 ## Prepare local game data
 
@@ -37,11 +37,31 @@ Alternatively enable `SKATE3_BUILD_OPENXR_PROBE` and set
 SDK and linked into the probe. Vulkan headers come from the existing ReXGlue
 submodule. The probe needs neither retail files nor generated PPC code.
 
+The session diagnostic also needs the Vulkan loader import library. Install
+the Vulkan SDK and expose `VULKAN_SDK`, or pass
+`-DSKATE3_VULKAN_LIBRARY=C:/VulkanSDK/<version>/Lib/vulkan-1.lib` to CMake.
+
 Set Meta Quest Link as the active OpenXR runtime in the Meta PC app and enter
 Quest Link on the headset before running the probe. It reports runtime name,
 HMD name, both recommended eye sizes, and the Vulkan API version interval.
 A nonzero exit status includes the failing OpenXR operation and result code.
 Runtime detection alone does not prove a working Vulkan device/session.
+
+Run `skate3-openxr-probe.exe --track` for a ten-second tracking-only session.
+The headset may show an empty background during the test; no image layers are
+submitted. The test creates Vulkan 1.3 instance/device objects through OpenXR,
+uses the runtime-selected physical device, handles session state transitions,
+and performs `xrWaitFrame`/`xrBeginFrame`/`xrEndFrame` with predicted-time
+`xrLocateSpace` and `xrLocateViews`. It reports valid/tracked pose counts,
+head-position range, display period, and `shouldRender` frames. Non-finite
+positions, invalid quaternions/FOVs, or absence of valid 6DoF samples fail the
+test. Spaces/session/device/instance are destroyed in dependency order.
+
+On the target Quest 3/RTX 4080, Vulkan 1.3 session creation and 901 valid tracked
+6DoF/stereo pose samples passed at an 11.111 ms runtime period (90 Hz). This
+measures the tracking loop, not game rendering performance. The runtime reports
+1.2 as its highest tested API version; this is not a hard upper limit, per
+[Khronos](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrGraphicsRequirementsVulkanKHR.html).
 
 ## Renderer integration boundary
 
@@ -51,9 +71,13 @@ uses it for frustum culling. Stereo must render the same immutable scene twice
 with per-eye matrices and compatible per-eye culling. Replaying the flat output
 texture into OpenXR would not satisfy either VR mode.
 
-The next integration must use the runtime-selected Vulkan physical device,
+The next gameplay integration must use the runtime-selected Vulkan physical device,
 graphics requirements, and device creation path before creating an XR session.
-It must then implement session events, predicted display time, reference spaces,
-`xrLocateViews`, acquired swapchain images and GPU completion before release.
-The existing Vulkan device creation and native-output hooks need to be extended
-before the module can safely present the game.
+The standalone session implements events, predicted display time, reference
+spaces and `xrLocateViews`. Gameplay still needs shared device creation,
+acquired swapchain images and GPU completion before release. The existing
+Vulkan device creation and native-output hooks need extensions before the
+module can safely present the game. Its RHI currently exposes no public image
+import, Vulkan device binding, or submission-completion hook to the app-side
+renderer. Calling `RenderScene` twice without accounting for those boundaries
+would reuse mutable depth/postprocessing state and break image ownership.
