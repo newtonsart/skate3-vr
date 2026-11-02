@@ -750,8 +750,10 @@ void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
 
 void Skate3BaseApp::OnPostSetup() {
 #if SKATE3_HAS_OPENXR
-  if (rex::cvar::Query<bool>("skate3_vr"))
+  if (rex::cvar::Query<bool>("skate3_vr")) {
     rex::ui::RegisterBind("bind_skate3_vr_recenter", "Ctrl+F8", "Recenter VR view", [] { skate3::vr::RecenterGameVr(); });
+    rex::ui::RegisterBind("bind_skate3_vr_color", "Ctrl+F9", "Toggle VR color conversion", [] { skate3::vr::ToggleGameVrColor(); });
+  }
 #endif
   skate3::shader_disasm::RunIfRequested();
   ApplySelectedProfileToRuntime();
@@ -833,6 +835,7 @@ void Skate3BaseApp::OnPreSetup(rex::RuntimeConfig& config) {
 void Skate3BaseApp::OnShutdown() {
 #if SKATE3_HAS_OPENXR
   rex::ui::UnregisterBind("bind_skate3_vr_recenter");
+  rex::ui::UnregisterBind("bind_skate3_vr_color");
   skate3::vr::ShutdownGameVr();
 #endif
   rex::ui::UnregisterBind("bind_skate3_menu");

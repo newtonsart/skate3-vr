@@ -103,11 +103,12 @@ https://github.com/mchughalex/rexglue-skate3/pull/18.
   menu image on a view-relative quad. The user confirmed improvement of the
   central HUD transform. A broad guest culling replacement and added native
   per-eye culling regressed the floor/NPC appearance and were removed; the user
-  confirmed floor and NPC recovery. Missing buildings when looking behind,
-  pause-menu presentation and excess brightness remain unresolved.
-- A combined color/culling change caused black headset output. Recovery uses
-  the previous image blit and keeps linear-color conversion disabled. The
-  cause has not yet been isolated sufficiently to re-enable it.
+  confirmed floor and NPC recovery. Missing buildings when looking behind and
+  pause-menu presentation remain unresolved.
+- Isolated the color-conversion black image: Meta's runtime images lacked
+  STORAGE usage. Conversion now runs in an app-owned storage image followed
+  by a transfer to XR. The user confirmed visible output and improved brightness.
+  Conversion defaults on; Ctrl+F9 toggles it without restarting.
 - Added a frontend movie timing guard for upstream issue #184. After rebuilding,
   the user confirmed progression beyond the difficulty selector. Local saves
   and the original assets were preserved.

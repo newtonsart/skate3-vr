@@ -35,7 +35,7 @@ REXCVAR_DEFINE_DOUBLE(skate3_vr_menu_distance, 2.0, "VR", "Menu panel distance i
 REXCVAR_DEFINE_DOUBLE(skate3_vr_menu_width, 2.4, "VR", "Menu panel width in meters");
 REXCVAR_DEFINE_DOUBLE(skate3_vr_hud_width, 1.6, "VR", "Readable HUD panel width in meters").range(0.5,3.0);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_hud_distance, 2.0, "VR", "HUD convergence distance in meters").range(0.5,5.0);
-REXCVAR_DEFINE_BOOL(skate3_vr_linear_color, false, "VR", "Enable experimental linear-color compositor conversion");
+REXCVAR_DEFINE_BOOL(skate3_vr_linear_color, true, "VR", "Decode display color before OpenXR composition");
 
 namespace skate3::vr {
 namespace {
@@ -54,7 +54,9 @@ struct EyeSwapchain {
   XrSwapchain handle=XR_NULL_HANDLE;
   uint32_t width=0,height=0;
   std::vector<XrSwapchainImageVulkan2KHR> images;
-  std::vector<VkImageView> views;
+  VkImage color_image=VK_NULL_HANDLE;
+  VkDeviceMemory color_memory=VK_NULL_HANDLE;
+  VkImageView color_view=VK_NULL_HANDLE;
 };
 struct State {
   OpenXrContext xr;
@@ -91,7 +93,9 @@ struct State {
       if(color_layout) vkDestroyDescriptorSetLayout(device,color_layout,nullptr);
       if(sampler) vkDestroySampler(device,sampler,nullptr);
       for(auto& eye:eyes) {
-        for(auto view:eye.views) vkDestroyImageView(device,view,nullptr);
+        if(eye.color_view) vkDestroyImageView(device,eye.color_view,nullptr);
+        if(eye.color_image) vkDestroyImage(device,eye.color_image,nullptr);
+        if(eye.color_memory) vkFreeMemory(device,eye.color_memory,nullptr);
         if(eye.handle) xrDestroySwapchain(eye.handle);
       }
       if(fence) vkDestroyFence(device,fence,nullptr);
@@ -119,19 +123,35 @@ struct State {
     for(int e=0;e<2;++e) {
       auto& eye=eyes[e]; eye.width=xr.views()[e].recommendedImageRectWidth; eye.height=xr.views()[e].recommendedImageRectHeight;
       XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-      info.usageFlags=XR_SWAPCHAIN_USAGE_UNORDERED_ACCESS_BIT|XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT|XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+      info.usageFlags=XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT|XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
       info.format=format; info.sampleCount=1; info.width=eye.width; info.height=eye.height;
       info.faceCount=1; info.arraySize=1; info.mipCount=1;
       XrCheck(xrCreateSwapchain(session->handle(),&info,&eye.handle),"Create eye swapchain");
       XrCheck(xrEnumerateSwapchainImages(eye.handle,0,&count,nullptr),"Count eye images");
       eye.images.resize(count,{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR});
       XrCheck(xrEnumerateSwapchainImages(eye.handle,count,&count,reinterpret_cast<XrSwapchainImageBaseHeader*>(eye.images.data())),"Read eye images");
-      for(const auto& image:eye.images) {
-        VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        view.image=image.image; view.viewType=VK_IMAGE_VIEW_TYPE_2D; view.format=format;
-        view.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
-        VkImageView handle=VK_NULL_HANDLE; VkCheck(vkCreateImageView(device,&view,nullptr,&handle),"Create XR storage view"); eye.views.push_back(handle);
-      }
+      // Meta's XR images lack STORAGE usage even when requested. Compute into
+      // our own storage image, then transfer into the runtime-owned image.
+      VkImageCreateInfo color{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+      color.imageType=VK_IMAGE_TYPE_2D; color.format=format;
+      color.extent={eye.width,eye.height,1}; color.mipLevels=1; color.arrayLayers=1;
+      color.samples=VK_SAMPLE_COUNT_1_BIT; color.tiling=VK_IMAGE_TILING_OPTIMAL;
+      color.usage=VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+      VkCheck(vkCreateImage(device,&color,nullptr,&eye.color_image),"Create VR color intermediate");
+      VkMemoryRequirements memory; vkGetImageMemoryRequirements(device,eye.color_image,&memory);
+      VkPhysicalDeviceMemoryProperties types; vkGetPhysicalDeviceMemoryProperties(gpu->physical_device(),&types);
+      uint32_t type=0;
+      while(type<types.memoryTypeCount && (!(memory.memoryTypeBits&(1u<<type)) ||
+          !(types.memoryTypes[type].propertyFlags&VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))) ++type;
+      if(type==types.memoryTypeCount) throw std::runtime_error("No VR color device memory");
+      VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+      allocation.allocationSize=memory.size; allocation.memoryTypeIndex=type;
+      VkCheck(vkAllocateMemory(device,&allocation,nullptr,&eye.color_memory),"Allocate VR color intermediate");
+      VkCheck(vkBindImageMemory(device,eye.color_image,eye.color_memory,0),"Bind VR color intermediate");
+      VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+      view.image=eye.color_image; view.viewType=VK_IMAGE_VIEW_TYPE_2D; view.format=format;
+      view.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+      VkCheck(vkCreateImageView(device,&view,nullptr,&eye.color_view),"Create VR color view");
     }
     VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pool_info.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT; pool_info.queueFamilyIndex=gpu->queue_family_graphics_compute();
@@ -219,10 +239,15 @@ struct State {
       barriers[0].newLayout=linear?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL; barriers[0].srcAccessMask=VK_ACCESS_MEMORY_WRITE_BIT|VK_ACCESS_MEMORY_READ_BIT; barriers[0].dstAccessMask=linear?VK_ACCESS_SHADER_READ_BIT:VK_ACCESS_TRANSFER_READ_BIT;
       barriers[1].image=eye.images.at(index).image; barriers[1].oldLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
       barriers[1].srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-      barriers[1].newLayout=linear?VK_IMAGE_LAYOUT_GENERAL:VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barriers[1].dstAccessMask=linear?VK_ACCESS_SHADER_WRITE_BIT:VK_ACCESS_TRANSFER_WRITE_BIT;
+      barriers[1].newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barriers[1].dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
       vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,0,nullptr,0,nullptr,2,barriers);
       if(linear) {
-      VkDescriptorImageInfo image_infos[2]={{sampler,image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{VK_NULL_HANDLE,eye.views[index],VK_IMAGE_LAYOUT_GENERAL}};
+      auto color_barrier=barriers[1];
+      color_barrier.image=eye.color_image; color_barrier.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED;
+      color_barrier.newLayout=VK_IMAGE_LAYOUT_GENERAL;
+      color_barrier.srcAccessMask=0; color_barrier.dstAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+      vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,0,nullptr,0,nullptr,1,&color_barrier);
+      VkDescriptorImageInfo image_infos[2]={{sampler,image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{VK_NULL_HANDLE,eye.color_view,VK_IMAGE_LAYOUT_GENERAL}};
       VkWriteDescriptorSet writes[2]{};
       for(int i=0;i<2;++i) { writes[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[i].dstSet=color_set; writes[i].dstBinding=i; writes[i].descriptorCount=1; writes[i].pImageInfo=&image_infos[i]; }
       writes[0].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[1].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -230,6 +255,13 @@ struct State {
       vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);
       vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_layout,0,1,&color_set,0,nullptr);
       vkCmdDispatch(command,(eye.width+15)/16,(eye.height+15)/16,1);
+      color_barrier.oldLayout=VK_IMAGE_LAYOUT_GENERAL; color_barrier.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      color_barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT; color_barrier.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
+      vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&color_barrier);
+      VkImageCopy copy{}; copy.srcSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+      copy.dstSubresource=copy.srcSubresource; copy.extent={eye.width,eye.height,1};
+      vkCmdCopyImage(command,eye.color_image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+          eye.images[index].image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
       } else {
         VkImageBlit blit{}; blit.srcSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; blit.dstSubresource=blit.srcSubresource;
         blit.srcOffsets[1]={int32_t(context.guest_output_width),int32_t(context.guest_output_height),1};
@@ -250,8 +282,8 @@ struct State {
       }
       barriers[0].oldLayout=(capture||!linear)?VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; barriers[0].newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
       barriers[0].srcAccessMask=(capture||!linear)?VK_ACCESS_TRANSFER_READ_BIT:VK_ACCESS_SHADER_READ_BIT; barriers[0].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
-      barriers[1].oldLayout=linear?VK_IMAGE_LAYOUT_GENERAL:VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barriers[1].newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-      barriers[1].srcAccessMask=linear?VK_ACCESS_SHADER_WRITE_BIT:VK_ACCESS_TRANSFER_WRITE_BIT; barriers[1].dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+      barriers[1].oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barriers[1].newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+      barriers[1].srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT; barriers[1].dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
       vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,0,nullptr,0,nullptr,2,barriers);
       VkCheck(vkEndCommandBuffer(command),"End XR transfer");
       VkCheck(vkResetFences(device,1,&fence),"Reset XR fence");
@@ -316,6 +348,12 @@ void ShutdownGameVr() {
 void RecenterGameVr() {
   std::lock_guard lock(mutex);
   if(state) { state->recentered=false; state->capture_done=false; }
+}
+void ToggleGameVrColor() {
+  std::lock_guard lock(mutex);
+  const bool enabled = !REXCVAR_GET(skate3_vr_linear_color);
+  rex::cvar::SetFlagByName("skate3_vr_linear_color", enabled ? "true" : "false");
+  REXLOG_INFO("VR: linear-color conversion {}", enabled ? "enabled" : "disabled");
 }
 bool GameVrEnabled() { return REXCVAR_GET(skate3_vr); }
 void PresentFlatMenu(const rex::graphics::NativeGuestOutputRenderContext& context) {

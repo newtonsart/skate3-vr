@@ -3,7 +3,8 @@
 Work takes place on `vr-development`. Experimental native stereo gameplay now
 runs on Quest 3. The user has confirmed that the world fuses and that frontend
 menus are visible and the HUD is improved. Visibility behind the camera, pause
-menus and color accuracy still require correction/validation. The standalone OpenXR probe
+menus still require correction/validation. The user confirmed improved brightness
+after the color fix below. The standalone OpenXR probe
 only checks runtime/session/tracking; it does not render the game.
 
 ## Prepare local game data
@@ -92,10 +93,12 @@ Frontend and pause UI use the emulated menu image on a view-relative 16:9 panel;
 gameplay uses independently rendered eye projections. A stereoscopic window
 mode is not implemented yet.
 
-`skate3_vr_linear_color` defaults to false after a black-image regression during
-combined color/culling changes. The recovery path shows menus correctly but
-does not resolve the reported brightness mismatch. Do not enable the conversion
-by default until tested separately. `skate3_vr_capture=true` writes ignored PPM
+`skate3_vr_linear_color` defaults to true after isolated headset validation.
+Ctrl+F9 toggles conversion for comparison or recovery. The earlier black image
+was reproduced with validation: Meta's XR images lacked STORAGE usage despite
+the unordered-access request. Conversion now writes into an app-owned Vulkan
+storage image and copies that image into the runtime's transfer destination.
+The user confirmed restored images and improved brightness. `skate3_vr_capture=true` writes ignored PPM
 captures of the source image, before the compositor conversion; these are not
 proof of the final image displayed in the headset.
 
@@ -135,7 +138,8 @@ image feature. These device-creation errors disappeared in the recovery run.
 Longer gameplay then exposed stale streamed meshes requesting indices beyond
 the resident index buffer. The patch now checks both the declared binding range
 and buffer allocation before recording indexed draws, with rate-limited rejection
-logs. This prevents invalid reads while decode commits catch up; it does not
+logs. The subsequent hardware run rejected six stale draws without the previous
+VUID errors. This prevents invalid reads while decode commits catch up; it does not
 claim to repair every underlying streaming mismatch. A prior run ended with
 `ErrorDeviceLost`; its exact cause is not proven. No stable-refresh claim is made
 from the synchronous render/copy timing logs or from validation-enabled runs.

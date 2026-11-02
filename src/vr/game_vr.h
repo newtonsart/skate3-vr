@@ -14,6 +14,7 @@ struct EyeCamera {
 void InitializeGameVr();
 void ShutdownGameVr();
 void RecenterGameVr();
+void ToggleGameVrColor();
 bool GameVrEnabled();
 void PresentFlatMenu(const rex::graphics::NativeGuestOutputRenderContext& context);
 bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& context,
