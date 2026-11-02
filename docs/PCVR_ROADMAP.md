@@ -1,8 +1,9 @@
 ﻿# Skate 3 PCVR — roadmap
 
 Experimental VR adaptation of [Skate3Recomp](https://github.com/mchughalex/skate3recomp).
-OpenXR runtime diagnostics are implemented; playable VR rendering is not yet
-available. Game data is NOT distributed. Build notes: [PCVR_BUILD.md](PCVR_BUILD.md).
+Native OpenXR stereo gameplay is experimental and has been viewed on Quest 3.
+Several visual corrections remain under validation. Game data is NOT
+distributed. Build notes: [PCVR_BUILD.md](PCVR_BUILD.md).
 
 ## Target
 Meta Quest 3 connected to a Windows PC (RTX 4080); standard Xbox/PlayStation
@@ -19,7 +20,7 @@ Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
 ## Milestones
 - [x] Windows build and Vulkan initialization using local game assets (visual/gameplay validation pending).
 - [x] Check PC OpenXR runtime and Quest Link headset tracking (standalone Vulkan session).
-- [ ] Hook Vulkan rendering into OpenXR swapchains.
+- [x] Hook Vulkan rendering into OpenXR swapchains.
 - [ ] Render two correct eye views and maintain stereo HUD readability.
 - [ ] Implement immersive third-person VR mode.
 - [ ] Implement stereoscopic window mode.
@@ -91,11 +92,31 @@ https://github.com/mchughalex/rexglue-skate3/pull/18.
   901 tracked head poses, 901 valid stereo pose pairs, 823 renderable frames.
   Display period: 11.111 ms (90 Hz); head translation varied by 0.1336 m on X.
   This validates tracking, not 90 FPS game rendering or GPU image submission.
-- Next: extend ReXGlue's Vulkan creation/image-import/submission interfaces
-  and bind the same graphics device to gameplay and OpenXR swapchains. The
-  standalone diagnostic's device is not shared with the running game.
+## Experimental gameplay integration (2026-11-02)
 
-No stereo
-swapchains, eye rendering, VR camera modes or VR HUD are connected to gameplay.
+- Shared runtime-selected ReXGlue Vulkan device/queue with OpenXR and created
+  two 2272x2464 swapchains. Both eye views render from one immutable scene,
+  with explicit GPU completion before swapchain release.
+- The user confirmed the 3D world fuses in the headset. This does not validate
+  complete camera behavior or performance across levels.
+- Recovered visible, correctly proportioned frontend menus using an emulated
+  menu image on a view-relative quad. The user confirmed improvement of the
+  central HUD transform. A broad guest culling replacement and added native
+  per-eye culling regressed the floor/NPC appearance and were removed; the user
+  confirmed floor and NPC recovery. Missing buildings when looking behind,
+  pause-menu presentation and excess brightness remain unresolved.
+- A combined color/culling change caused black headset output. Recovery uses
+  the previous image blit and keeps linear-color conversion disabled. The
+  cause has not yet been isolated sufficiently to re-enable it.
+- Added a frontend movie timing guard for upstream issue #184. After rebuilding,
+  the user confirmed progression beyond the difficulty selector. Local saves
+  and the original assets were preserved.
+- Vulkan validation exposed conflicting Meta/ReXGlue timeline feature nodes,
+  a missing multisample-storage shader feature and later indexed draws beyond
+  a streamed mesh's resident buffer. The device creation patch removes the
+  feature errors; a common indexed-draw bounds check rejects stale draw ranges.
+  A previous `ErrorDeviceLost` remains under investigation.
+- CPU timing logs include renderer submission and synchronous waits, not GPU
+  timestamp profiling. Stable target refresh is not established.
 
 Original project's history and credits are retained.

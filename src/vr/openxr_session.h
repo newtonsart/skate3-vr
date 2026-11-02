@@ -23,15 +23,23 @@ class OpenXrSession {
   OpenXrSession(const OpenXrSession&) = delete;
   OpenXrSession& operator=(const OpenXrSession&) = delete;
   void Create(uint32_t vulkan_api_version);
+  void Bind(VkInstance instance, VkPhysicalDevice gpu, VkDevice device, uint32_t family);
   bool PollEvents();
+  bool BeginFrame(TrackingFrame& frame);
+  void EndFrame(const TrackingFrame& frame, uint32_t count = 0,
+                const XrCompositionLayerBaseHeader* const* layers = nullptr);
   bool SampleTracking(TrackingFrame& frame);
   void RequestExit();
   bool running() const { return running_; }
   XrSessionState state() const { return state_; }
   const char* gpu_name() const { return gpu_properties_.deviceName; }
+  XrSession handle() const { return session_; }
+  XrSpace local_space() const { return local_; }
+  XrSpace view_space() const { return view_; }
 
  private:
   void Destroy();
+  void CreateSpaces(uint32_t family);
   const OpenXrContext& context_;
   VkInstance vk_instance_ = VK_NULL_HANDLE;
   VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
@@ -43,5 +51,7 @@ class OpenXrSession {
   XrSessionState state_ = XR_SESSION_STATE_UNKNOWN;
   bool running_ = false;
   bool exiting_ = false;
+  bool owns_device_ = false;
+  bool frame_started_ = false;
 };
 }  // namespace skate3::vr

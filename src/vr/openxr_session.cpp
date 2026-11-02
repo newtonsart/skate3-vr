@@ -29,12 +29,12 @@ OpenXrSession::OpenXrSession(const OpenXrContext& context) : context_(context) {
 OpenXrSession::~OpenXrSession() { Destroy(); }
 
 void OpenXrSession::Destroy() {
-  if (device_) vkDeviceWaitIdle(device_);
+  if (device_ && owns_device_) vkDeviceWaitIdle(device_);
   if (view_) xrDestroySpace(view_);
   if (local_) xrDestroySpace(local_);
   if (session_) xrDestroySession(session_);
-  if (device_) vkDestroyDevice(device_, nullptr);
-  if (vk_instance_) vkDestroyInstance(vk_instance_, nullptr);
+  if (device_ && owns_device_) vkDestroyDevice(device_, nullptr);
+  if (vk_instance_ && owns_device_) vkDestroyInstance(vk_instance_, nullptr);
   view_ = local_ = XR_NULL_HANDLE;
   session_ = XR_NULL_HANDLE;
   device_ = VK_NULL_HANDLE;
@@ -45,6 +45,7 @@ void OpenXrSession::Destroy() {
 void OpenXrSession::Create(uint32_t api_version) {
   if (vk_instance_ || !context_.system()) throw std::logic_error("Invalid session initialization");
   try {
+    owns_device_ = true;
     const auto instance = context_.instance();
     const auto system = context_.system();
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -90,6 +91,25 @@ void OpenXrSession::Create(uint32_t api_version) {
     Check(Load<PFN_xrCreateVulkanDeviceKHR>(instance, "xrCreateVulkanDeviceKHR")(
         instance, &xr_device, &device_, &vk_result), "Create XR Vulkan device");
     CheckVk(vk_result, "Create Vulkan device");
+    CreateSpaces(family);
+  } catch (...) {
+    Destroy();
+    throw;
+  }
+}
+
+void OpenXrSession::Bind(VkInstance instance, VkPhysicalDevice gpu, VkDevice device, uint32_t family) {
+  if (vk_instance_ || !context_.system() || !instance || !gpu || !device)
+    throw std::logic_error("Invalid external Vulkan binding");
+  vk_instance_ = instance;
+  physical_device_ = gpu;
+  device_ = device;
+  owns_device_ = false;
+  vkGetPhysicalDeviceProperties(gpu, &gpu_properties_);
+  try { CreateSpaces(family); } catch (...) { Destroy(); throw; }
+}
+
+void OpenXrSession::CreateSpaces(uint32_t family) {
     XrGraphicsBindingVulkan2KHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR};
     binding.instance = vk_instance_;
     binding.physicalDevice = physical_device_;
@@ -98,18 +118,14 @@ void OpenXrSession::Create(uint32_t api_version) {
     binding.queueIndex = 0;
     XrSessionCreateInfo session{XR_TYPE_SESSION_CREATE_INFO};
     session.next = &binding;
-    session.systemId = system;
-    Check(xrCreateSession(instance, &session, &session_), "Create Vulkan XR session");
+    session.systemId = context_.system();
+    Check(xrCreateSession(context_.instance(), &session, &session_), "Create Vulkan XR session");
     XrReferenceSpaceCreateInfo space{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
     space.poseInReferenceSpace.orientation.w = 1.0f;
     space.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
     Check(xrCreateReferenceSpace(session_, &space, &local_), "Create local space");
     space.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
     Check(xrCreateReferenceSpace(session_, &space, &view_), "Create head space");
-  } catch (...) {
-    Destroy();
-    throw;
-  }
 }
 
 bool OpenXrSession::PollEvents() {
@@ -141,13 +157,15 @@ bool OpenXrSession::PollEvents() {
   return !exiting_;
 }
 
-bool OpenXrSession::SampleTracking(TrackingFrame& frame) {
+bool OpenXrSession::BeginFrame(TrackingFrame& frame) {
   if (!running_ || exiting_) return false;
+  if (frame_started_) throw std::logic_error("XR frame already begun");
   XrFrameWaitInfo wait{XR_TYPE_FRAME_WAIT_INFO};
   XrFrameState state{XR_TYPE_FRAME_STATE};
   Check(xrWaitFrame(session_, &wait, &state), "Wait predicted frame");
   XrFrameBeginInfo begin{XR_TYPE_FRAME_BEGIN_INFO};
   Check(xrBeginFrame(session_, &begin), "Begin frame");
+  frame_started_ = true;
   frame = {};
   frame.display_time = state.predictedDisplayTime;
   frame.display_period = state.predictedDisplayPeriod;
@@ -161,14 +179,28 @@ bool OpenXrSession::SampleTracking(TrackingFrame& frame) {
   uint32_t count = 0;
   auto eyes_result = xrLocateViews(session_, &locate, &views, 2, &count, frame.eyes);
   frame.view_flags = views.viewStateFlags;
-  XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
-  end.displayTime = state.predictedDisplayTime;
-  end.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-  auto end_result = xrEndFrame(session_, &end);
+  if (XR_FAILED(head_result) || XR_FAILED(eyes_result) || count != 2) EndFrame(frame);
   Check(head_result, "Locate head pose");
   Check(eyes_result, "Locate stereo eye poses");
-  Check(end_result, "End tracking-only frame");
   if (count != 2) throw std::runtime_error("Runtime returned incorrect eye count");
+  return true;
+}
+
+void OpenXrSession::EndFrame(const TrackingFrame& frame, uint32_t count,
+                           const XrCompositionLayerBaseHeader* const* layers) {
+  if (!frame_started_) throw std::logic_error("No XR frame to end");
+  XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
+  end.displayTime = frame.display_time;
+  end.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+  end.layerCount = count;
+  end.layers = layers;
+  frame_started_ = false;
+  Check(xrEndFrame(session_, &end), "End XR frame");
+}
+
+bool OpenXrSession::SampleTracking(TrackingFrame& frame) {
+  if (!BeginFrame(frame)) return false;
+  EndFrame(frame);
   return true;
 }
 

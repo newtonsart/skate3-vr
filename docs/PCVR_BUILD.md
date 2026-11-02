@@ -1,8 +1,10 @@
 # PCVR development
 
-Work takes place on `vr-development`. No playable VR integration is available
-yet. The OpenXR probe checks the actual installed runtime and can verify a
-Vulkan session with predicted head/eye tracking. It does not render the game.
+Work takes place on `vr-development`. Experimental native stereo gameplay now
+runs on Quest 3. The user has confirmed that the world fuses and that frontend
+menus are visible and the HUD is improved. Visibility behind the camera, pause
+menus and color accuracy still require correction/validation. The standalone OpenXR probe
+only checks runtime/session/tracking; it does not render the game.
 
 ## Prepare local game data
 
@@ -71,13 +73,69 @@ uses it for frustum culling. Stereo must render the same immutable scene twice
 with per-eye matrices and compatible per-eye culling. Replaying the flat output
 texture into OpenXR would not satisfy either VR mode.
 
-The next gameplay integration must use the runtime-selected Vulkan physical device,
-graphics requirements, and device creation path before creating an XR session.
-The standalone session implements events, predicted display time, reference
-spaces and `xrLocateViews`. Gameplay still needs shared device creation,
-acquired swapchain images and GPU completion before release. The existing
-Vulkan device creation and native-output hooks need extensions before the
-module can safely present the game. Its RHI currently exposes no public image
-import, Vulkan device binding, or submission-completion hook to the app-side
-renderer. Calling `RenderScene` twice without accounting for those boundaries
-would reuse mutable depth/postprocessing state and break image ownership.
+The integration creates ReXGlue's Vulkan instance/device through OpenXR and
+binds that same device and graphics queue to the XR session. It renders the same
+immutable scene for each eye, flushes the native renderer, waits for its writes,
+copies to the acquired XR image, and waits before releasing it. This deliberately
+serial implementation is a correctness baseline, not an optimized VR renderer.
+
+`cmake/ApplyOpenXRInterop.py` applies the small creation/image/submission hooks
+to a disposable copy of the pinned SDK. Set `REXSDK_DIR` to that copy, without a
+top-level `.git` entry. The script refuses the source submodule, checks exact
+patch anchors and is idempotent. Preserve unrelated local submodule changes.
+
+Configure the game with `SKATE3_ENABLE_OPENXR=ON`, `SKATE3_OPENXR_SDK_DIR`,
+`SKATE3_VULKAN_LIBRARY` and `SKATE3_GLSLANG` (the Vulkan SDK's
+`glslangValidator.exe`). Launch with `--gpu_backend=vulkan --skate3_vr=true`.
+Ctrl+F8 recenters the headset. The original gamepad remains the gameplay input.
+Frontend and pause UI use the emulated menu image on a view-relative 16:9 panel;
+gameplay uses independently rendered eye projections. A stereoscopic window
+mode is not implemented yet.
+
+`skate3_vr_linear_color` defaults to false after a black-image regression during
+combined color/culling changes. The recovery path shows menus correctly but
+does not resolve the reported brightness mismatch. Do not enable the conversion
+by default until tested separately. `skate3_vr_capture=true` writes ignored PPM
+captures of the source image, before the compositor conversion; these are not
+proof of the final image displayed in the headset.
+
+The new-career difficulty transition also hit upstream
+[issue #184](https://github.com/mchughalex/skate3recomp/issues/184).
+Following the diagnosis in
+[932902e](https://github.com/dougieprishpreed/skate3recomp-plus/commit/932902e72463b6402a763337dde4026f07fdbc7a),
+early movie-skip presses are retained until 1500 ms of frontend playback.
+Boot logos still skip immediately. The user confirmed that the corrected build
+passes the difficulty screen. `skate3-movie-skip-test` checks the timing gate;
+`skate3-stereo-math-test` checks eye matrices and HUD placement.
+
+## Recovery and validation notes
+
+The attempted replacement of guest culling planes and additional native eye
+culling were removed after the user reported missing ground and incorrect NPC
+appearance. The user confirmed recovery of both with the HUD change retained.
+The original rear-view visibility limitation remains unresolved. Do not restore
+that culling patch based on synthetic plane tests alone.
+
+Explicitly enable the installed validation layer during diagnostics:
+
+```powershell
+$env:VK_LAYER_PATH = 'C:/VulkanSDK/<version>/Bin'
+# Append to the normal game launch:
+# --vulkan_validation_enabled=true --vulkan_log_debug_messages=true
+```
+
+Check the startup log for `VK_LAYER_KHRONOS_validation`; requesting validation
+without an available layer silently produced a run without it on this PC.
+Validation found the Meta runtime adding a timeline feature node alongside
+ReXGlue's Vulkan 1.2 aggregate feature node. The interop patch uses individual
+uniform-layout/scalar-layout/timeline nodes for XR, explicitly requests the
+sampler mirror-clamp extension and enables the supported multisample storage
+image feature. These device-creation errors disappeared in the recovery run.
+
+Longer gameplay then exposed stale streamed meshes requesting indices beyond
+the resident index buffer. The patch now checks both the declared binding range
+and buffer allocation before recording indexed draws, with rate-limited rejection
+logs. This prevents invalid reads while decode commits catch up; it does not
+claim to repair every underlying streaming mismatch. A prior run ended with
+`ErrorDeviceLost`; its exact cause is not proven. No stable-refresh claim is made
+from the synchronous render/copy timing logs or from validation-enabled runs.

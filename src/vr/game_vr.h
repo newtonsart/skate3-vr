@@ -1,0 +1,22 @@
+#pragma once
+#include <memory>
+#include "skate3_native_scene.h"
+#include <rex/graphics/native_guest_renderer.h>
+
+namespace skate3::vr {
+struct EyeCamera {
+  std::shared_ptr<const native_scene::FrameScene> scene;
+  float view_proj[16]{}, proj[16]{}, position[3]{};
+  bool override_camera = false;
+  int eye_index = 0;
+  float hud_transform[4]={1,1,0,0};
+};
+void InitializeGameVr();
+void ShutdownGameVr();
+void RecenterGameVr();
+bool GameVrEnabled();
+void PresentFlatMenu(const rex::graphics::NativeGuestOutputRenderContext& context);
+bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& context,
+                  std::shared_ptr<const native_scene::FrameScene> scene,
+                  rex::graphics::NativeGuestOutputRenderer render);
+}

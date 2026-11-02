@@ -10,6 +10,10 @@
 #include "skate3_win_icon.h"
 #include "skate3_title_update_installer.h"
 #include "skate3_user_settings.h"
+#if SKATE3_HAS_OPENXR
+#include "vr/game_vr.h"
+#include <rex/graphics/vulkan/graphics_system.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -745,6 +749,10 @@ void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
 }
 
 void Skate3BaseApp::OnPostSetup() {
+#if SKATE3_HAS_OPENXR
+  if (rex::cvar::Query<bool>("skate3_vr"))
+    rex::ui::RegisterBind("bind_skate3_vr_recenter", "Ctrl+F8", "Recenter VR view", [] { skate3::vr::RecenterGameVr(); });
+#endif
   skate3::shader_disasm::RunIfRequested();
   ApplySelectedProfileToRuntime();
   ApplyGameplayCursorMode();
@@ -813,7 +821,20 @@ void Skate3BaseApp::OnPostSetup() {
   }
 }
 
+void Skate3BaseApp::OnPreSetup(rex::RuntimeConfig& config) {
+#if SKATE3_HAS_OPENXR
+  if (rex::cvar::Query<bool>("skate3_vr")) {
+    skate3::vr::InitializeGameVr();
+    config.graphics = std::make_unique<rex::graphics::vulkan::VulkanGraphicsSystem>();
+  }
+#endif
+}
+
 void Skate3BaseApp::OnShutdown() {
+#if SKATE3_HAS_OPENXR
+  rex::ui::UnregisterBind("bind_skate3_vr_recenter");
+  skate3::vr::ShutdownGameVr();
+#endif
   rex::ui::UnregisterBind("bind_skate3_menu");
   rex::ui::UnregisterBind("bind_skate3_menu_alt");
   rex::ui::UnregisterBind("bind_skate3_save_draw_fingerprints");
