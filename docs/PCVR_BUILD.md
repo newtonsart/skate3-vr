@@ -2,10 +2,10 @@
 
 Work takes place on `vr-development`. Experimental native stereo gameplay now
 runs on Quest 3. The user has confirmed that the world fuses and that frontend
-menus are visible and the HUD is improved. Visibility behind the camera, pause
-menus still require correction/validation. The user confirmed improved brightness
-after the color fix below. The standalone OpenXR probe
-only checks runtime/session/tracking; it does not render the game.
+menus are visible and the HUD is improved. Complete rear-view visibility across
+levels still requires validation. The user also confirmed a complete, readable
+pause menu and improved brightness after the color fix below. The standalone
+OpenXR probe only checks runtime/session/tracking; it does not render the game.
 
 ## Prepare local game data
 
@@ -116,8 +116,18 @@ passes the difficulty screen. `skate3-movie-skip-test` checks the timing gate;
 The attempted replacement of guest culling planes and additional native eye
 culling were removed after the user reported missing ground and incorrect NPC
 appearance. The user confirmed recovery of both with the HUD change retained.
-The original rear-view visibility limitation remains unresolved. Do not restore
-that culling patch based on synthetic plane tests alone.
+Do not restore that culling replacement based on synthetic plane tests alone.
+
+A subsequent conservative expansion preserves the original normals and moves
+only their distances outward by 200 game units. It matches the last captured
+main-camera position against the four perspective side planes, supports either
+distance-sign convention, and rejects stale camera snapshots, orthographic
+volumes, unrelated cameras and invalid values. Original plane bits are restored
+after the scoped call. Tests check that every existing half-space grows.
+The user confirmed retained ground/NPC appearance and improved visibility when
+looking behind. `skate3_vr_expand_game_frustum` defaults on in VR; Ctrl+F10 toggles
+it. This is a finite expansion of loaded geometry, not proof of complete
+360-degree visibility across all levels or streaming transitions.
 
 Explicitly enable the installed validation layer during diagnostics:
 

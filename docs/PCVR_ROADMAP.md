@@ -103,8 +103,11 @@ https://github.com/mchughalex/rexglue-skate3/pull/18.
   menu image on a view-relative quad. The user confirmed improvement of the
   central HUD transform. A broad guest culling replacement and added native
   per-eye culling regressed the floor/NPC appearance and were removed; the user
-  confirmed floor and NPC recovery. Missing buildings when looking behind and
-  pause-menu presentation remain unresolved.
+  confirmed floor and NPC recovery. A later conservative expansion of the
+  original planes, matched to the main perspective camera, improved rear-view
+  visibility without those regressions according to the user. Complete
+  visibility across levels remains under validation. The user subsequently
+  confirmed that the pause menu is complete, centered and readable in the visor.
 - Isolated the color-conversion black image: Meta's runtime images lacked
   STORAGE usage. Conversion now runs in an app-owned storage image followed
   by a transfer to XR. The user confirmed visible output and improved brightness.
@@ -119,5 +122,10 @@ https://github.com/mchughalex/rexglue-skate3/pull/18.
   A previous `ErrorDeviceLost` remains under investigation.
 - CPU timing logs include renderer submission and synchronous waits, not GPU
   timestamp profiling. Stable target refresh is not established.
+- Ctrl+F10 toggles the conservative 200-game-unit culling expansion; it defaults
+  on in VR after the above headset test. Synthetic checks cover both plane
+  distance conventions, both inside signs, monotonic visibility expansion,
+  unrelated cameras, orthographic volumes and invalid inputs. It rejects
+  orthographic volumes and does not reconstruct streamed-out geometry.
 
 Original project's history and credits are retained.

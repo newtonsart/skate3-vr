@@ -9,6 +9,7 @@
 #include "openxr_context.h"
 #include "openxr_session.h"
 #include "stereo_math.h"
+#include "cull_frustum.h"
 #include "vr_color_spirv.h"
 #define XR_USE_GRAPHICS_API_VULKAN
 #include <openxr/openxr_platform.h>
@@ -36,6 +37,7 @@ REXCVAR_DEFINE_DOUBLE(skate3_vr_menu_width, 2.4, "VR", "Menu panel width in mete
 REXCVAR_DEFINE_DOUBLE(skate3_vr_hud_width, 1.6, "VR", "Readable HUD panel width in meters").range(0.5,3.0);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_hud_distance, 2.0, "VR", "HUD convergence distance in meters").range(0.5,5.0);
 REXCVAR_DEFINE_BOOL(skate3_vr_linear_color, true, "VR", "Decode display color before OpenXR composition");
+REXCVAR_DEFINE_BOOL(skate3_vr_expand_game_frustum, true, "VR", "Expand the matched main-camera culling planes for head turns");
 
 namespace skate3::vr {
 namespace {
@@ -302,6 +304,9 @@ struct State {
 };
 std::mutex mutex;
 std::unique_ptr<State> state;
+std::mutex cull_camera_mutex;
+float cull_camera[3]{};
+std::chrono::steady_clock::time_point cull_camera_time{};
 
 VkResult CreateInstance(void* user,PFN_vkGetInstanceProcAddr proc,const VkInstanceCreateInfo* info,VkInstance* output) {
   auto& s=*static_cast<State*>(user);
@@ -355,6 +360,17 @@ void ToggleGameVrColor() {
   rex::cvar::SetFlagByName("skate3_vr_linear_color", enabled ? "true" : "false");
   REXLOG_INFO("VR: linear-color conversion {}", enabled ? "enabled" : "disabled");
 }
+bool GetGameCullCamera(float camera[3]) {
+  std::lock_guard lock(cull_camera_mutex);
+  if (std::chrono::steady_clock::now()-cull_camera_time>std::chrono::milliseconds(250)) return false;
+  std::copy(cull_camera,cull_camera+3,camera);
+  return true;
+}
+void ToggleGameVrCulling() {
+  const bool enabled=!REXCVAR_GET(skate3_vr_expand_game_frustum);
+  rex::cvar::SetFlagByName("skate3_vr_expand_game_frustum",enabled?"true":"false");
+  REXLOG_INFO("VR: main-camera culling expansion {}",enabled?"enabled":"disabled");
+}
 bool GameVrEnabled() { return REXCVAR_GET(skate3_vr); }
 void PresentFlatMenu(const rex::graphics::NativeGuestOutputRenderContext& context) {
   RenderStereo(context, nullptr, [](const auto&, void*) { return true; });
@@ -367,6 +383,11 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
   if(!state || state->failed) return render(input,nullptr);
   auto& s=*state;
   if(input.backend!=NativeGuestOutputBackend::kVulkan) return render(input,nullptr);
+  if (scene) {
+    std::lock_guard camera_lock(cull_camera_mutex);
+    std::copy(scene->cam_pos,scene->cam_pos+3,cull_camera);
+    cull_camera_time=std::chrono::steady_clock::now();
+  }
   TrackingFrame frame; bool begun=false;
   try {
     if(!s.session) s.Bind(static_cast<rex::ui::vulkan::VulkanDevice*>(vulkan::NativeRhiGetVulkanDevice(input.device)));

@@ -5,6 +5,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#if SKATE3_HAS_OPENXR
+#include <mutex>
+#include "vr/cull_frustum.h"
+#include <rex/kernel/guest_presence.h>
+#include <rex/logging.h>
+#endif
 
 #include <rex/cvar.h>
 #include <rex/graphics/native_guest_renderer.h>
@@ -42,6 +48,35 @@ inline bool Skate3UltrawideShouldWidenGameCullFrustum(u8* base, uint32_t cull_bl
 struct Skate3UltrawideGameFrustumPatchScope {
   Skate3UltrawideGameFrustumPatchScope(PPCContext& ctx_, u8* base_, uint32_t cull_block)
       : ctx(ctx_), base(base_) {
+#if SKATE3_HAS_OPENXR
+    if (rex::cvar::Query<bool>("skate3_vr") &&
+        rex::cvar::Query<bool>("skate3_vr_expand_game_frustum") &&
+        rex::graphics::IsNativeGuestOutputActive() &&
+        rex::kernel::guest_presence::GameplayContextValue() == 1 &&
+        cull_block >= 0x10000 && cull_block < 0xFFFFD000) {
+      float camera[3];
+      if (!skate3::vr::GetGameCullCamera(camera)) return;
+      static std::mutex vr_cull_mutex;
+      vr_lock = std::unique_lock<std::mutex>(vr_cull_mutex);
+      block = cull_block;
+      std::array<float,24> original,expanded;
+      for (uint32_t p=0;p<6;++p) {
+        const auto plane=LoadPlane(5152+p*16);
+        std::copy(plane.begin(),plane.end(),original.begin()+p*4);
+      }
+      if (!skate3::vr::ExpandMainCullFrustum(original,camera,200.0f,expanded)) return;
+      for (uint32_t p=0;p<6;++p) {
+        vr_original_d[p]=REX_LOAD_U32(block+5164+p*16);
+        StoreFloat(block+5164+p*16,expanded[p*4+3]);
+      }
+      vr_active=true;
+      static uint64_t applied=0;
+      if (++applied<=4)
+        REXLOG_INFO("VR: expanded matched main cull block {:08X} camera=({:.2f},{:.2f},{:.2f}) plane0.d={:.2f}->{:.2f}",
+                    block,camera[0],camera[1],camera[2],original[3],expanded[3]);
+      return;
+    }
+#endif
     if (!Skate3UltrawideShouldWidenGameCullFrustum(base, cull_block)) {
       return;
     }
@@ -90,7 +125,12 @@ struct Skate3UltrawideGameFrustumPatchScope {
     active = true;
   }
 
-  ~Skate3UltrawideGameFrustumPatchScope() = default;
+  ~Skate3UltrawideGameFrustumPatchScope() {
+#if SKATE3_HAS_OPENXR
+    if (vr_active) for (uint32_t p=0;p<6;++p)
+      REX_STORE_U32(block+5164+p*16,vr_original_d[p]);
+#endif
+  }
 
   Skate3UltrawideGameFrustumPatchScope(const Skate3UltrawideGameFrustumPatchScope&) = delete;
   Skate3UltrawideGameFrustumPatchScope& operator=(const Skate3UltrawideGameFrustumPatchScope&) =
@@ -185,4 +225,9 @@ struct Skate3UltrawideGameFrustumPatchScope {
   u8* base = nullptr;
   float side_scale = 1.0f;
   bool active = false;
+#if SKATE3_HAS_OPENXR
+  std::unique_lock<std::mutex> vr_lock;
+  std::array<uint32_t,6> vr_original_d{};
+  bool vr_active=false;
+#endif
 };
