@@ -12,6 +12,7 @@ if(SKATE3_STATIC_MSVC_RUNTIME)
 endif()
 
 project(skate3 VERSION 2.0.0 LANGUAGES CXX)
+add_executable(skate3-movie-skip-test EXCLUDE_FROM_ALL src/skate3_movie_skip_test.cpp)
 
 if(WIN32)
     enable_language(RC)

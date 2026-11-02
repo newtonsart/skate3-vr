@@ -1,4 +1,5 @@
 #include "skate3_demo_path.h"
+#include "skate3_movie_skip_gate.h"
 
 #include "generated/skate3_init.h"
 
@@ -48,6 +49,9 @@ REXCVAR_DEFINE_INT32(skate3_demo_path_input_delay_ms, 600, "Skate 3",
 REXCVAR_DEFINE_BOOL(skate3_intro_movie_skip, true, "Skate 3",
                     "Skip the frontend intro movie when A or Start is pressed "
                     "(the default keyboard bindings make that Space and Enter)");
+REXCVAR_DEFINE_INT32(skate3_frontend_movie_min_play_ms, 1500, "Skate 3",
+                    "Minimum frontend clip time before a requested skip completes")
+    .range(0, 10000);
 
 namespace skate3::demo_path {
 namespace {
@@ -409,15 +413,22 @@ void SetUiInputProvider(std::function<rex::input::InputSystem*()> provider) {
 }
 
 bool ShouldForceIntroMovieComplete() {
+  bool requested = false;
   if (AutomationEnabled() && g_skip_intro_movie.load(std::memory_order_relaxed)) {
     bool expected = false;
     if (g_logged_intro_movie_skip.compare_exchange_strong(expected, true,
                                                           std::memory_order_relaxed)) {
       REXLOG_INFO("Skate 3 demo path: forcing frontend intro movie complete");
     }
-    return true;
+    requested = true;
   }
-  return UserRequestedMovieSkip();
+  requested = UserRequestedMovieSkip() || requested;
+  static Skate3MovieSkipGate gate;
+  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  return gate.Poll(now, requested,
+                   rex::kernel::guest_presence::GameplayContextValue() == 0,
+                   REXCVAR_GET(skate3_frontend_movie_min_play_ms));
 }
 
 }  // namespace skate3::demo_path
