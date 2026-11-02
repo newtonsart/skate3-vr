@@ -751,6 +751,7 @@ void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
 void Skate3BaseApp::OnPostSetup() {
 #if SKATE3_HAS_OPENXR
   if (rex::cvar::Query<bool>("skate3_vr")) {
+    rex::ui::RegisterBind("bind_skate3_vr_capture", "Ctrl+F7", "Capture VR stereo images", [] { skate3::vr::CaptureGameVr(); });
     rex::ui::RegisterBind("bind_skate3_vr_recenter", "Ctrl+F8", "Recenter VR view", [] { skate3::vr::RecenterGameVr(); });
     rex::ui::RegisterBind("bind_skate3_vr_color", "Ctrl+F9", "Toggle VR color conversion", [] { skate3::vr::ToggleGameVrColor(); });
     rex::ui::RegisterBind("bind_skate3_vr_culling", "Ctrl+F10", "Toggle experimental VR culling expansion", [] { skate3::vr::ToggleGameVrCulling(); });
@@ -836,6 +837,7 @@ void Skate3BaseApp::OnPreSetup(rex::RuntimeConfig& config) {
 void Skate3BaseApp::OnShutdown() {
 #if SKATE3_HAS_OPENXR
   rex::ui::UnregisterBind("bind_skate3_vr_recenter");
+  rex::ui::UnregisterBind("bind_skate3_vr_capture");
   rex::ui::UnregisterBind("bind_skate3_vr_color");
   rex::ui::UnregisterBind("bind_skate3_vr_culling");
   skate3::vr::ShutdownGameVr();

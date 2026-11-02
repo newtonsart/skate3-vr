@@ -40,6 +40,7 @@ void OpenXrSession::Destroy() {
   device_ = VK_NULL_HANDLE;
   vk_instance_ = VK_NULL_HANDLE;
   running_ = false;
+  queue_mutex_ = nullptr;
 }
 
 void OpenXrSession::Create(uint32_t api_version) {
@@ -98,15 +99,22 @@ void OpenXrSession::Create(uint32_t api_version) {
   }
 }
 
-void OpenXrSession::Bind(VkInstance instance, VkPhysicalDevice gpu, VkDevice device, uint32_t family) {
+void OpenXrSession::Bind(VkInstance instance, VkPhysicalDevice gpu, VkDevice device, uint32_t family,
+                       std::recursive_mutex* queue_mutex) {
   if (vk_instance_ || !context_.system() || !instance || !gpu || !device)
     throw std::logic_error("Invalid external Vulkan binding");
   vk_instance_ = instance;
   physical_device_ = gpu;
   device_ = device;
   owns_device_ = false;
+  queue_mutex_ = queue_mutex;
   vkGetPhysicalDeviceProperties(gpu, &gpu_properties_);
   try { CreateSpaces(family); } catch (...) { Destroy(); throw; }
+}
+
+std::unique_lock<std::recursive_mutex> OpenXrSession::LockQueue() const {
+  if (queue_mutex_) return std::unique_lock<std::recursive_mutex>(*queue_mutex_);
+  return {};
 }
 
 void OpenXrSession::CreateSpaces(uint32_t family) {
@@ -164,7 +172,10 @@ bool OpenXrSession::BeginFrame(TrackingFrame& frame) {
   XrFrameState state{XR_TYPE_FRAME_STATE};
   Check(xrWaitFrame(session_, &wait, &state), "Wait predicted frame");
   XrFrameBeginInfo begin{XR_TYPE_FRAME_BEGIN_INFO};
-  Check(xrBeginFrame(session_, &begin), "Begin frame");
+  {
+    auto queue_lock = LockQueue();
+    Check(xrBeginFrame(session_, &begin), "Begin frame");
+  }
   frame_started_ = true;
   frame = {};
   frame.display_time = state.predictedDisplayTime;
@@ -195,6 +206,7 @@ void OpenXrSession::EndFrame(const TrackingFrame& frame, uint32_t count,
   end.layerCount = count;
   end.layers = layers;
   frame_started_ = false;
+  auto queue_lock = LockQueue();
   Check(xrEndFrame(session_, &end), "End XR frame");
 }
 

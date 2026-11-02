@@ -119,7 +119,10 @@ https://github.com/mchughalex/rexglue-skate3/pull/18.
   a missing multisample-storage shader feature and later indexed draws beyond
   a streamed mesh's resident buffer. The device creation patch removes the
   feature errors; a common indexed-draw bounds check rejects stale draw ranges.
-  A previous `ErrorDeviceLost` remains under investigation.
+  A later failure without validation exposed missing queue synchronization
+  between OpenXR calls and ReXGlue's desktop presenter. All four queue-touching
+  XR calls now use the presenter's queue mutex. The next run continued past
+  the former failure point into gameplay without validation.
 - CPU timing logs include renderer submission and synchronous waits, not GPU
   timestamp profiling. Stable target refresh is not established.
 - Ctrl+F10 toggles the conservative 200-game-unit culling expansion; it defaults
@@ -127,5 +130,9 @@ https://github.com/mchughalex/rexglue-skate3/pull/18.
   distance conventions, both inside signs, monotonic visibility expansion,
   unrelated cameras, orthographic volumes and invalid inputs. It rejects
   orthographic volumes and does not reconstruct streamed-out geometry.
+- Investigating near-ground spikes reported only in the headset at speed.
+  Added Ctrl+F7 source-image captures. Quest Link ASW was temporarily switched
+  from auto to off; the user then reported no spikes with the queue fix active.
+  Restored auto for comparison. No isolated ASW-causality claim yet.
 
 Original project's history and credits are retained.

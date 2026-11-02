@@ -14,6 +14,7 @@ struct EyeCamera {
 void InitializeGameVr();
 void ShutdownGameVr();
 void RecenterGameVr();
+void CaptureGameVr();
 void ToggleGameVrColor();
 void ToggleGameVrCulling();
 bool GameVrEnabled();

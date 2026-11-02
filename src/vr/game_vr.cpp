@@ -110,7 +110,8 @@ struct State {
   void Bind(rex::ui::vulkan::VulkanDevice* graphics) {
     gpu=graphics; device=gpu->device();
     session=std::make_unique<OpenXrSession>(xr);
-    session->Bind(gpu->vulkan_instance()->instance(),gpu->physical_device(),device,gpu->queue_family_graphics_compute());
+    auto& queue=*gpu->queue_families()[gpu->queue_family_graphics_compute()].queues[0];
+    session->Bind(gpu->vulkan_instance()->instance(),gpu->physical_device(),device,gpu->queue_family_graphics_compute(),&queue.mutex);
     uint32_t count=0;
     XrCheck(xrEnumerateSwapchainFormats(session->handle(),0,&count,nullptr),"Enumerate XR formats");
     std::vector<int64_t> formats(count);
@@ -223,7 +224,10 @@ struct State {
   void Transfer(const NativeGuestOutputRenderContext& context,int e,bool capture) {
     auto& eye=eyes[e]; uint32_t index=0;
     XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    XrCheck(xrAcquireSwapchainImage(eye.handle,&acquire,&index),"Acquire eye image");
+    {
+      auto queue=gpu->AcquireQueue(gpu->queue_family_graphics_compute(),0);
+      XrCheck(xrAcquireSwapchainImage(eye.handle,&acquire,&index),"Acquire eye image");
+    }
     bool waited=false;
     try {
       XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO}; wait.timeout=XR_INFINITE_DURATION;
@@ -295,9 +299,17 @@ struct State {
       VkCheck(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"Complete XR transfer");
       if(capture) SaveCapture(context.guest_output_width,context.guest_output_height,e);
       XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-      XrCheck(xrReleaseSwapchainImage(eye.handle,&release),"Release eye image"); waited=false;
+      {
+        auto queue=gpu->AcquireQueue(gpu->queue_family_graphics_compute(),0);
+        XrCheck(xrReleaseSwapchainImage(eye.handle,&release),"Release eye image");
+      }
+      waited=false;
     } catch(...) {
-      if(waited) { XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO}; xrReleaseSwapchainImage(eye.handle,&release); }
+      if(waited) {
+        auto queue=gpu->AcquireQueue(gpu->queue_family_graphics_compute(),0);
+        XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+        xrReleaseSwapchainImage(eye.handle,&release);
+      }
       throw;
     }
   }
@@ -353,6 +365,14 @@ void ShutdownGameVr() {
 void RecenterGameVr() {
   std::lock_guard lock(mutex);
   if(state) { state->recentered=false; state->capture_done=false; }
+}
+void CaptureGameVr() {
+  std::lock_guard lock(mutex);
+  if (state) {
+    state->capture_done=false;
+    rex::cvar::SetFlagByName("skate3_vr_capture","true");
+    REXLOG_INFO("VR: stereo capture requested");
+  }
 }
 void ToggleGameVrColor() {
   std::lock_guard lock(mutex);

@@ -150,6 +150,24 @@ the resident index buffer. The patch now checks both the declared binding range
 and buffer allocation before recording indexed draws, with rate-limited rejection
 logs. The subsequent hardware run rejected six stale draws without the previous
 VUID errors. This prevents invalid reads while decode commits catch up; it does not
-claim to repair every underlying streaming mismatch. A prior run ended with
-`ErrorDeviceLost`; its exact cause is not proven. No stable-refresh claim is made
-from the synchronous render/copy timing logs or from validation-enabled runs.
+claim to repair every underlying streaming mismatch.
+
+The first run without validation failed during Vulkan submission. ReXGlue's
+desktop presenter and OpenXR were sharing a queue, but only our Vulkan submits
+held its mutex. The session now borrows that same recursive mutex for
+`xrBeginFrame`/`xrEndFrame`, and image acquire/release use it too, as required by
+[Khronos](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XR_KHR_vulkan_enable-concurrency.html).
+`xrWaitFrame` and `xrWaitSwapchainImage` remain outside that lock. The subsequent
+non-validation run passed the former failure point and continued into gameplay.
+Observed render/copy intervals were often 7–10.4 ms with roughly 1300–2100
+items, but submission cadence varied. These CPU intervals include synchronous
+GPU waits; they are not separate GPU timestamp measurements or proof of stable
+72/90 Hz across levels.
+
+Ctrl+F7 requests a source-image stereo capture when an artifact is visible.
+The user reported near-ground spikes only in the headset, increasing with
+speed. Quest Link's local diagnostic CLI reported ASW mode `auto`. A temporary
+`server:asw.Off` test, together with the synchronization fix above, produced a
+user report that the spikes were absent. The prior `auto` mode was restored for
+comparison. This does not yet isolate ASW as the cause; captures before the
+runtime's reprojection cannot show compositor-generated artifacts.

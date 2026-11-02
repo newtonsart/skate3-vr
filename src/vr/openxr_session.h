@@ -2,6 +2,7 @@
 
 #include "openxr_context.h"
 #include <vulkan/vulkan.h>
+#include <mutex>
 
 namespace skate3::vr {
 
@@ -23,7 +24,8 @@ class OpenXrSession {
   OpenXrSession(const OpenXrSession&) = delete;
   OpenXrSession& operator=(const OpenXrSession&) = delete;
   void Create(uint32_t vulkan_api_version);
-  void Bind(VkInstance instance, VkPhysicalDevice gpu, VkDevice device, uint32_t family);
+  void Bind(VkInstance instance, VkPhysicalDevice gpu, VkDevice device, uint32_t family,
+            std::recursive_mutex* queue_mutex = nullptr);
   bool PollEvents();
   bool BeginFrame(TrackingFrame& frame);
   void EndFrame(const TrackingFrame& frame, uint32_t count = 0,
@@ -40,6 +42,7 @@ class OpenXrSession {
  private:
   void Destroy();
   void CreateSpaces(uint32_t family);
+  std::unique_lock<std::recursive_mutex> LockQueue() const;
   const OpenXrContext& context_;
   VkInstance vk_instance_ = VK_NULL_HANDLE;
   VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
@@ -53,5 +56,6 @@ class OpenXrSession {
   bool exiting_ = false;
   bool owns_device_ = false;
   bool frame_started_ = false;
+  std::recursive_mutex* queue_mutex_ = nullptr;
 };
 }  // namespace skate3::vr
