@@ -169,5 +169,7 @@ The user reported near-ground spikes only in the headset, increasing with
 speed. Quest Link's local diagnostic CLI reported ASW mode `auto`. A temporary
 `server:asw.Off` test, together with the synchronization fix above, produced a
 user report that the spikes were absent. The prior `auto` mode was restored for
-comparison. This does not yet isolate ASW as the cause; captures before the
-runtime's reprojection cannot show compositor-generated artifacts.
+comparison, and the user confirmed no spikes while accelerating and improved
+performance. The final runtime setting remains `auto`; disabling ASW is not a
+requirement of this checkpoint. This does not isolate ASW as the cause; captures
+before the runtime's reprojection cannot show compositor-generated artifacts.

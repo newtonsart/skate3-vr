@@ -5,6 +5,9 @@ Native OpenXR stereo gameplay is experimental and has been viewed on Quest 3.
 Several visual corrections remain under validation. Game data is NOT
 distributed. Build notes: [PCVR_BUILD.md](PCVR_BUILD.md).
 
+First playable checkpoint: **PCVR v0.1.0-alpha** (2026-11-02).
+Verified behavior and remaining tests: [PCVR_V0_1_CHECKPOINT.md](PCVR_V0_1_CHECKPOINT.md).
+
 ## Target
 Meta Quest 3 connected to a Windows PC (RTX 4080); standard Xbox/PlayStation
 controller for all gameplay, head tracking from the headset via OpenXR.
@@ -18,11 +21,12 @@ controller for all gameplay, head tracking from the headset via OpenXR.
 Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
 
 ## Milestones
-- [x] Windows build and Vulkan initialization using local game assets (visual/gameplay validation pending).
+- [x] Windows build and Vulkan gameplay using local game assets.
 - [x] Check PC OpenXR runtime and Quest Link headset tracking (standalone Vulkan session).
 - [x] Hook Vulkan rendering into OpenXR swapchains.
-- [ ] Render two correct eye views and maintain stereo HUD readability.
-- [ ] Implement immersive third-person VR mode.
+- [x] Basic per-eye rendering and readable stereo HUD, confirmed on Quest 3.
+- [x] Initial immersive third-person view with independent head orientation.
+- [ ] Complete comfort limits, camera settings and broader immersive-mode tests.
 - [ ] Implement stereoscopic window mode.
 - [ ] Profile latency and frame time, target stable refresh.
 
@@ -133,6 +137,8 @@ https://github.com/mchughalex/rexglue-skate3/pull/18.
 - Investigating near-ground spikes reported only in the headset at speed.
   Added Ctrl+F7 source-image captures. Quest Link ASW was temporarily switched
   from auto to off; the user then reported no spikes with the queue fix active.
-  Restored auto for comparison. No isolated ASW-causality claim yet.
+  Restored auto for comparison; the user confirmed that spikes remained absent
+  while accelerating and also reported improved performance. ASW remains auto.
+  No isolated ASW-causality claim is made.
 
 Original project's history and credits are retained.
