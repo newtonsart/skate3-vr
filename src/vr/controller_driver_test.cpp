@@ -22,6 +22,12 @@ int main() {
   const auto packet=static_cast<uint32_t>(state.packet_number);
   PublishVrControls(controls); driver->GetState(0,&state);
   Check(state.packet_number==packet);
+  controls.grip[0]=controls.grip[1]=1;
+  PublishVrControls(controls,true); driver->GetState(0,&state);
+  Check((state.gamepad.buttons&(X_INPUT_GAMEPAD_LEFT_SHOULDER|X_INPUT_GAMEPAD_RIGHT_SHOULDER))==0);
+  PublishVrControls(controls); driver->GetState(0,&state);
+  Check((state.gamepad.buttons&X_INPUT_GAMEPAD_RIGHT_SHOULDER)!=0);
+  controls.grip[0]=controls.grip[1]=0; PublishVrControls(controls);
   X_INPUT_CAPABILITIES caps{};
   Check(driver->GetCapabilities(0,0,&caps)==X_ERROR_SUCCESS && caps.type==1 && caps.sub_type==1);
   InputSystem input(nullptr); input.AddDriver(std::move(driver));

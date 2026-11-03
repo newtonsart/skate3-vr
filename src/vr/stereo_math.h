@@ -2,6 +2,7 @@
 #include <openxr/openxr.h>
 
 namespace skate3::vr {
+XrVector3f RotateVector(XrQuaternionf rotation,XrVector3f vector);
 XrPosef RecenterPose(const XrPosef& head);
 XrPosef WindowPose(const XrPosef& reference,float distance,float height,float horizontal=0);
 void MakeWindowEyeCamera(const float game_view_proj[16],const float game_proj[16],

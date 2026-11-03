@@ -61,6 +61,14 @@ In window modes, select **Move window**:
 | A | Place the window and save size/distance/height preferences |
 | B | Cancel and restore the previous placement and size |
 
+With Touch, release the opening inputs, point at the window (blue ring), then
+hold that hand's grip to move it (green ring). Release to anchor it. While
+holding, its stick up/down changes distance and the other hand's stick up/down
+changes size. A confirms, B restores the whole edit. Touch grips are reserved
+for grabbing inside this editor; regular-gamepad LB/RB still resize normally.
+Tracking/focus loss releases the grab and requires a fresh grip after recovery.
+See [controller placement and validation](PCVR_CONTROLLERS.md#point-and-grab-the-window).
+
 The window stays upright and anchored in LOCAL space while you adjust it.
 Horizontal displacement is session-only; no persistent room anchor is created.
 Ctrl+F8 clears that horizontal offset and recenters the window in front of you.

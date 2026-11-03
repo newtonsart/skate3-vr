@@ -159,6 +159,7 @@ struct State {
       if(readback) vkDestroyBuffer(device,readback,nullptr);
       if(readback_memory) vkFreeMemory(device,readback_memory,nullptr);
       PublishVrControls({});
+      PublishWindowMotion({});
       controllers.reset();
       room.reset();
       session.reset();
@@ -353,7 +354,7 @@ struct State {
     return true;
   }
   void Transfer(const NativeGuestOutputRenderContext& context,int e,bool capture,const SettingsImage* settings=nullptr,
-                float feather=0,float aspect=1) {
+                float feather=0,float aspect=1,WindowPointer pointer={}) {
     auto& eye=eyes[e]; uint32_t index=0;
     const bool profile=timing && e<2;
     XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
@@ -371,7 +372,7 @@ struct State {
       const uint32_t source_width=settings ? settings->width : context.guest_output_width;
       const uint32_t source_height=settings ? settings->height : context.guest_output_height;
       const bool linear=REXCVAR_GET(skate3_vr_linear_color) && !(settings && settings->srgb);
-      const bool compute=linear || feather>0;
+      const bool compute=linear || feather>0 || pointer.hand>=0;
       VkCheck(vkResetCommandBuffer(command,0),"Reset XR command buffer");
       VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
       VkCheck(vkBeginCommandBuffer(command,&begin),"Begin XR transfer");
@@ -400,7 +401,9 @@ struct State {
       vkUpdateDescriptorSets(device,2,writes,0,nullptr);
       vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);
       vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_layout,0,1,&color_set,0,nullptr);
-      const ColorParameters parameters{uint32_t(linear),feather,aspect,0};
+      ColorParameters parameters{uint32_t(linear),feather,aspect,0};
+      parameters.pointer_u=pointer.u; parameters.pointer_v=pointer.v;
+      parameters.pointer_mode=pointer.hand<0 ? 0 : (pointer.holding ? 2 : 1);
       vkCmdPushConstants(command,pipeline_layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(parameters),&parameters);
       vkCmdDispatch(command,(eye.width+15)/16,(eye.height+15)/16,1);
       color_barrier.oldLayout=VK_IMAGE_LAYOUT_GENERAL; color_barrier.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -519,6 +522,7 @@ void ShutdownGameVr() {
   ShutdownSettingsSurface(); settings_visible=false;
   vulkan::NativeRhiSetOutputSizeOverride(0,0);
   rex::ui::vulkan::SetRuntimeHooks({}); state.reset();
+  PublishVrControls({}); PublishWindowMotion({});
 }
 void RecenterGameVr() {
   CancelVrEditor();
@@ -595,18 +599,24 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       REXLOG_INFO("VR: view mode {} (0 immersive, 1 window, 2 window + room)",mode);
     }
     if(!s.session->PollEvents() || !s.session->BeginFrame(frame)) {
-      PublishVrControls({}); return s.BenchmarkDesktop(input,scene,render);
+      PublishVrControls({}); PublishWindowMotion({}); return s.BenchmarkDesktop(input,scene,render);
     }
     begun=true;
+    TouchControls controls;
+    ControllerHands hands;
     if(s.controllers) {
-      try { PublishVrControls(s.controllers->Sample(s.session->state()==XR_SESSION_STATE_FOCUSED)); }
+      try {
+        controls=s.controllers->Sample(s.session->state()==XR_SESSION_STATE_FOCUSED);
+        if(VrEditorPanelMode()==1) hands=s.controllers->LocateHands(s.session->local_space(),frame.display_time);
+      }
       catch(const std::exception& error) {
-        PublishVrControls({}); s.controllers.reset();
+        controls={}; PublishVrControls({}); PublishWindowMotion({}); s.controllers.reset();
         REXLOG_WARN("VR: controller input stopped: {}",error.what());
       }
     }
     constexpr auto valid=XR_VIEW_STATE_ORIENTATION_VALID_BIT|XR_VIEW_STATE_POSITION_VALID_BIT;
     if(!frame.should_render || (frame.view_flags&valid)!=valid) {
+      PublishVrControls({}); PublishWindowMotion({});
       s.session->EndFrame(frame); begun=false; return s.BenchmarkDesktop(input,scene,render);
     }
     if (REXCVAR_GET(skate3_vr_recenter_requested)) {
@@ -632,6 +642,9 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     if (window && !(window_width>=0.5f && window_width<=6 &&
         window_distance>=0.5f && window_distance<=8 && window_height>=-2 && window_height<=2 &&
         aspect>0 && aspect<=10)) throw std::runtime_error("Invalid VR window size/position");
+    PublishVrControls(controls,VrEditorPanelMode()==1);
+    PublishWindowMotion({controls,hands,s.reference,aspect});
+    const auto pointer=window && VrEditorPanelMode()==1 ? ReadWindowPointer() : WindowPointer{};
     if (!settings_visible.load()) s.settings_presented=false;
     XrCompositionLayerProjectionView projections[2]={{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
     bool rendered=false,world_rendered=false,eye_world[2]{};
@@ -684,7 +697,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       scene_copy_ms[eye]+=camera.scene_copy_ms;
       if(!rendered) break;
       const auto copy_start=std::chrono::steady_clock::now();
-      s.Transfer(context,eye,capture,nullptr,feather,aspect);
+      s.Transfer(context,eye,capture,nullptr,feather,aspect,pointer);
       copy_ms[eye]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-copy_start).count();
       projections[eye].pose=frame.eyes[eye].pose; projections[eye].fov=frame.eyes[eye].fov;
       projections[eye].subImage.swapchain=s.eyes[eye].handle;
@@ -780,6 +793,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     return rendered;
   } catch(const std::exception& error) {
     PublishVrControls({});
+    PublishWindowMotion({});
     if(begun) { try { s.session->EndFrame(frame); } catch(...) {} }
     s.failed=true; REXLOG_ERROR("VR: stereo rendering stopped: {}",error.what());
     try { if(s.session) s.session->RequestExit(); } catch(...) {}

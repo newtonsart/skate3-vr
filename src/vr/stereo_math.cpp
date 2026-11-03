@@ -34,11 +34,11 @@ XrQuaternionf Mul(XrQuaternionf a, XrQuaternionf b) {
           a.w*b.z+a.x*b.y-a.y*b.x+a.z*b.w,
           a.w*b.w-a.x*b.x-a.y*b.y-a.z*b.z};
 }
-XrVector3f Rotate(XrQuaternionf q, XrVector3f v) {
+}  // namespace
+XrVector3f RotateVector(XrQuaternionf q, XrVector3f v) {
   auto t=Mul(Mul(q,{v.x,v.y,v.z,0}),{-q.x,-q.y,-q.z,q.w});
   return {t.x,t.y,t.z};
 }
-}  // namespace
 XrPosef RecenterPose(const XrPosef& head) {
   const auto& q=head.orientation;
   const float yaw=std::atan2(2*(q.w*q.y+q.x*q.z),1-2*(q.y*q.y+q.x*q.x));
@@ -48,7 +48,7 @@ XrPosef WindowPose(const XrPosef& reference,float distance,float height,float ho
   if (!std::isfinite(distance) || distance<0.5f || !std::isfinite(height) || !std::isfinite(horizontal))
     throw std::runtime_error("Invalid window position");
   auto pose=reference;
-  const auto offset=Rotate(reference.orientation,{horizontal,height,-distance});
+  const auto offset=RotateVector(reference.orientation,{horizontal,height,-distance});
   pose.position.x+=offset.x; pose.position.y+=offset.y; pose.position.z+=offset.z;
   return pose;
 }
@@ -60,7 +60,7 @@ void MakeWindowEyeCamera(const float* vp,const float* proj,const float* camera,
     throw std::runtime_error("Invalid stereo window");
   float inverse[16],game_view[16]; Invert(proj,inverse); Multiply(vp,inverse,game_view);
   const auto& q=reference.orientation;
-  auto offset=Rotate({-q.x,-q.y,-q.z,q.w},{eye.pose.position.x-reference.position.x,
+  auto offset=RotateVector({-q.x,-q.y,-q.z,q.w},{eye.pose.position.x-reference.position.x,
       eye.pose.position.y-reference.position.y,eye.pose.position.z-reference.position.z});
   if (!std::isfinite(offset.x) || !std::isfinite(offset.y) || !std::isfinite(offset.z))
     throw std::runtime_error("Invalid stereo window eye pose");
@@ -92,7 +92,7 @@ void MakeHudTransform(const XrPosef& head,const XrView& eye,const float* project
                       float width,float aspect,float distance,float* transform) {
   if(!(width>0 && aspect>0 && distance>=0.5f)) throw std::runtime_error("Invalid HUD panel");
   const auto& q=head.orientation;
-  const auto offset=Rotate({-q.x,-q.y,-q.z,q.w},{eye.pose.position.x-head.position.x,
+  const auto offset=RotateVector({-q.x,-q.y,-q.z,q.w},{eye.pose.position.x-head.position.x,
       eye.pose.position.y-head.position.y,eye.pose.position.z-head.position.z});
   const float depth=distance+offset.z;
   transform[0]=width*0.5f*projection[0]/depth;
@@ -116,7 +116,7 @@ void MakeEyeCamera(const float* vp,const float* proj,const float* camera,
   const float basis[3][3]={{-fz,0,fx},{0,1,0},{-fx,0,-fz}};
   const XrQuaternionf invq{-reference.orientation.x,-reference.orientation.y,-reference.orientation.z,reference.orientation.w};
   const auto rotation=Mul(invq,eye.pose.orientation);
-  const auto offset=Rotate(invq,{eye.pose.position.x-reference.position.x,
+  const auto offset=RotateVector(invq,{eye.pose.position.x-reference.position.x,
       eye.pose.position.y-reference.position.y,eye.pose.position.z-reference.position.z});
   const float delta[3]={offset.x,offset.y+camera_height,offset.z+camera_distance};
   for(int k=0;k<3;++k) {
@@ -126,7 +126,7 @@ void MakeEyeCamera(const float* vp,const float* proj,const float* camera,
   float axes[3][3];
   for(int a=0;a<3;++a) {
     XrVector3f unit{}; if(a==0) unit.x=1; if(a==1) unit.y=1; if(a==2) unit.z=1;
-    const auto v=Rotate(rotation,unit); const float components[3]={v.x,v.y,v.z};
+    const auto v=RotateVector(rotation,unit); const float components[3]={v.x,v.y,v.z};
     for(int k=0;k<3;++k) { axes[a][k]=0; for(int b=0;b<3;++b) axes[a][k]+=components[b]*basis[b][k]; }
   }
   float eye_view[16]{}; eye_view[15]=1;

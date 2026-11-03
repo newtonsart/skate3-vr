@@ -29,7 +29,9 @@ OpenXrGamepad::OpenXrGamepad(XrInstance instance,XrSession session):session_(ses
       {"left_trigger","LT","/user/hand/left/input/trigger/value",XR_ACTION_TYPE_FLOAT_INPUT},
       {"right_trigger","RT","/user/hand/right/input/trigger/value",XR_ACTION_TYPE_FLOAT_INPUT},
       {"left_grip","LB","/user/hand/left/input/squeeze/value",XR_ACTION_TYPE_FLOAT_INPUT},
-      {"right_grip","RB","/user/hand/right/input/squeeze/value",XR_ACTION_TYPE_FLOAT_INPUT}
+      {"right_grip","RB","/user/hand/right/input/squeeze/value",XR_ACTION_TYPE_FLOAT_INPUT},
+      {"left_aim","Left window pointer","/user/hand/left/input/aim/pose",XR_ACTION_TYPE_POSE_INPUT},
+      {"right_aim","Right window pointer","/user/hand/right/input/aim/pose",XR_ACTION_TYPE_POSE_INPUT}
     };
     XrActionSuggestedBinding suggested[Count]{};
     for (int i=0;i<Count;++i) {
@@ -48,11 +50,23 @@ OpenXrGamepad::OpenXrGamepad(XrInstance instance,XrSession session):session_(ses
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
     attach.countActionSets=1; attach.actionSets=&set_;
     Check(xrAttachSessionActionSets(session_,&attach),"Attach controller actions");
-  } catch (...) { xrDestroyActionSet(set_); set_=XR_NULL_HANDLE; throw; }
+    for(int hand=0;hand<2;++hand) {
+      XrActionSpaceCreateInfo space{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+      space.action=actions_[hand ? RightAim : LeftAim]; space.poseInActionSpace.orientation.w=1;
+      Check(xrCreateActionSpace(session_,&space,&aim_spaces_[hand]),"Create controller pointer space");
+    }
+  } catch (...) {
+    for(auto space:aim_spaces_) if(space) xrDestroySpace(space);
+    xrDestroyActionSet(set_); set_=XR_NULL_HANDLE; throw;
+  }
 }
-OpenXrGamepad::~OpenXrGamepad() { if(set_) xrDestroyActionSet(set_); }
+OpenXrGamepad::~OpenXrGamepad() {
+  for(auto space:aim_spaces_) if(space) xrDestroySpace(space);
+  if(set_) xrDestroyActionSet(set_);
+}
 TouchControls OpenXrGamepad::Sample(bool focused) {
   TouchControls controls;
+  focused_=false;
   if (!focused) return controls;
   XrActiveActionSet active{set_,XR_NULL_PATH};
   XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
@@ -60,6 +74,7 @@ TouchControls OpenXrGamepad::Sample(bool focused) {
   const auto result=xrSyncActions(session_,&sync);
   if (result==XR_SESSION_NOT_FOCUSED) return controls;
   Check(result,"Sync controller actions");
+  focused_=true;
   auto get=[&](Action action) {
     XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO}; info.action=actions_[action]; return info;
   };
@@ -86,5 +101,20 @@ TouchControls OpenXrGamepad::Sample(bool focused) {
     controls.grip[hand]=scalar(hand ? RightGrip : LeftGrip);
   }
   return controls;
+}
+ControllerHands OpenXrGamepad::LocateHands(XrSpace base,XrTime display_time) {
+  ControllerHands hands;
+  if(!focused_) return hands;
+  constexpr auto tracked=XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_ORIENTATION_VALID_BIT|
+      XR_SPACE_LOCATION_POSITION_TRACKED_BIT|XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+  for(int hand=0;hand<2;++hand) {
+    XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO}; info.action=actions_[hand ? RightAim : LeftAim];
+    XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
+    if(XR_FAILED(xrGetActionStatePose(session_,&info,&state)) || !state.isActive) continue;
+    XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+    if(XR_SUCCEEDED(xrLocateSpace(aim_spaces_[hand],base,display_time,&location)) &&
+        (location.locationFlags&tracked)==tracked) hands.aim[hand]={true,location.pose};
+  }
+  return hands;
 }
 }

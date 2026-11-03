@@ -7,6 +7,8 @@
 #include <imgui.h>
 #include <atomic>
 #include <cstdio>
+#include <chrono>
+#include <mutex>
 
 REXCVAR_DEFINE_INT32(skate3_vr_edit_mode,0,"VR","Live editor: 0 off, 1 window placement, 2 immersive camera").range(0,2);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_horizontal,0.0,"VR","Session-only horizontal window offset in meters").range(-8.0,8.0);
@@ -16,6 +18,18 @@ namespace {
 EditorControls editor;
 int editor_view=0;
 std::atomic<int> panel_mode{0};
+WindowGrab window_grab;
+std::mutex motion_mutex;
+WindowMotionFrame motion_frame;
+WindowPointer window_pointer;
+std::chrono::steady_clock::time_point motion_time;
+WindowMotionFrame ReadWindowMotion() {
+  std::lock_guard lock(motion_mutex);
+  return std::chrono::steady_clock::now()-motion_time<std::chrono::milliseconds(250) ? motion_frame : WindowMotionFrame{};
+}
+void SetWindowPointer(WindowPointer pointer) {
+  std::lock_guard lock(motion_mutex); window_pointer=pointer;
+}
 EditorValues ReadValues() {
   return {float(rex::cvar::Query<double>("skate3_vr_window_horizontal")),
       float(rex::cvar::Query<double>("skate3_vr_window_height")),
@@ -41,12 +55,21 @@ void WriteValues(const EditorValues& values) {
 }
 }
 int VrEditorPanelMode() { return panel_mode.load(); }
+void PublishWindowMotion(const WindowMotionFrame& frame) {
+  std::lock_guard lock(motion_mutex); motion_frame=frame; motion_time=std::chrono::steady_clock::now();
+  if(!frame.controls.connected) window_pointer={};
+}
+WindowPointer ReadWindowPointer() {
+  std::lock_guard lock(motion_mutex);
+  return std::chrono::steady_clock::now()-motion_time<std::chrono::milliseconds(250) ? window_pointer : WindowPointer{};
+}
 void CancelVrEditor() {
   if (editor.mode!=EditorMode::None) WriteValues(editor.original);
   editor.mode=EditorMode::None;
   if (REXCVAR_GET(skate3_vr_edit_mode)!=0)
     rex::cvar::SetFlagByName("skate3_vr_edit_mode","0");
   panel_mode=0;
+  window_grab.Reset(); SetWindowPointer({});
 }
 bool DrawVrEditor(ImGuiIO& io,rex::input::InputSystem* input,const std::filesystem::path& settings) {
   const int requested=REXCVAR_GET(skate3_vr_edit_mode);
@@ -74,6 +97,12 @@ bool DrawVrEditor(ImGuiIO& io,rex::input::InputSystem* input,const std::filesyst
   controls.vertical+=float(ImGui::IsKeyDown(ImGuiKey_W))-float(ImGui::IsKeyDown(ImGuiKey_S));
   controls.depth+=float(ImGui::IsKeyDown(ImGuiKey_UpArrow))-float(ImGui::IsKeyDown(ImGuiKey_DownArrow));
   controls.resize+=float(ImGui::IsKeyDown(ImGuiKey_Equal))-float(ImGui::IsKeyDown(ImGuiKey_Minus));
+  WindowPointer pointer;
+  if(mode==EditorMode::Window && editor.armed && !controls.apply && !controls.cancel) {
+    pointer=window_grab.Update(ReadWindowMotion(),editor.current,io.DeltaTime);
+    if(pointer.holding) controls.horizontal=controls.vertical=controls.depth=0;
+  }
+  SetWindowPointer(pointer);
   const auto result=editor.Update(controls,io.DeltaTime);
   WriteValues(editor.current);
 
@@ -92,15 +121,17 @@ bool DrawVrEditor(ImGuiIO& io,rex::input::InputSystem* input,const std::filesyst
   if (placing) std::snprintf(values,sizeof(values),"Horizontal %.2f m   Height %.2f m   Distance %.2f m   Width %.2f m",v.horizontal,v.height,v.distance,v.width);
   else std::snprintf(values,sizeof(values),"Camera distance %+.2f m   Camera height %+.2f m",v.camera_distance,v.camera_height);
   text(65,28,IM_COL32(170,220,245,255),values);
-  text(108,26,IM_COL32(230,230,230,255),placing ? "Left stick: move / height   Right stick: distance   LB / RB: size"
+  text(108,26,IM_COL32(230,230,230,255),placing ? "Touch: point + hold grip to move; release to anchor. Held stick: distance; other stick: size."
       : "Left stick up / down: height   Right stick up / down: distance");
   text(151,26,IM_COL32(230,230,230,255),placing ? "A: Place window   B: Cancel" : "A: Apply camera   B: Cancel");
-  text(190,22,IM_COL32(185,190,195,255),"Keyboard: WASD / arrows / - +   Enter: Apply   Escape: Cancel");
+  text(190,22,IM_COL32(185,190,195,255),placing ? "Gamepad: left stick move, right stick distance, LB/RB size. Keyboard: WASD / arrows / - +."
+      : "Keyboard: WASD / arrows / - +   Enter: Apply   Escape: Cancel");
   if (result!=EditorResult::Editing) {
     if (result==EditorResult::Apply) rex::ui::SaveSimpleSettingsConfig(settings);
     REXLOG_INFO("VR editor: {}",result==EditorResult::Apply ? "applied" : "cancelled and restored");
     editor.mode=EditorMode::None;
     rex::cvar::SetFlagByName("skate3_vr_edit_mode","0");
+    window_grab.Reset(); SetWindowPointer({});
   }
   return true;
 }

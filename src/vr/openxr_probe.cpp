@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
     auto start = Clock::now();
     auto deadline = start + std::chrono::seconds(15);
     auto next_log = start;
-    uint32_t frames = 0, valid_head = 0, tracked_head = 0, valid_eyes = 0, renderable = 0, controller_samples = 0;
+    uint32_t frames = 0, valid_head = 0, tracked_head = 0, valid_eyes = 0, renderable = 0, controller_samples = 0, aim_samples = 0;
     XrSessionState previous = XR_SESSION_STATE_UNKNOWN;
     float minimum[3] = {INFINITY, INFINITY, INFINITY};
     float maximum[3] = {-INFINITY, -INFINITY, -INFINITY};
@@ -73,9 +73,12 @@ int main(int argc, char** argv) {
         continue;
       }
       skate3::vr::ControllerPad pad;
+      skate3::vr::ControllerHands hands;
       if(gamepad) {
         pad=skate3::vr::MapTouchControls(gamepad->Sample(session.state()==XR_SESSION_STATE_FOCUSED));
         controller_samples+=pad.connected;
+        hands=gamepad->LocateHands(session.local_space(),frame.display_time);
+        aim_samples+=hands.aim[0].valid || hands.aim[1].valid;
       }
       if (passthrough && frame.should_render) {
         if (!room.Enable()) {
@@ -125,6 +128,7 @@ int main(int argc, char** argv) {
         next_log = Clock::now() + std::chrono::seconds(1);
         if(gamepad) std::printf("Controller connected=%d buttons=0x%04x sticks=(%d,%d)/(%d,%d) triggers=%u/%u\n",
             int(pad.connected),unsigned(pad.buttons),pad.lx,pad.ly,pad.rx,pad.ry,unsigned(pad.lt),unsigned(pad.rt));
+        if(gamepad) std::printf("Tracked window pointers L/R=%d/%d\n",int(hands.aim[0].valid),int(hands.aim[1].valid));
       }
     }
     const bool room_submitted=room.layer()!=XR_NULL_HANDLE;
@@ -139,6 +143,7 @@ int main(int argc, char** argv) {
     std::printf("Head position range: (%.4f %.4f %.4f)m\n", maximum[0]-minimum[0], maximum[1]-minimum[1], maximum[2]-minimum[2]);
     if (passthrough && !room_submitted) throw std::runtime_error("No renderable frame for passthrough test; activate Quest Link in the headset");
     if(controllers && !controller_samples) throw std::runtime_error("No active Touch controls; focus this PCVR session and wake the controllers");
+    if(controllers && !aim_samples) throw std::runtime_error("No tracked controller pointers; keep a controller visible to the headset cameras");
     if(controllers) std::printf("Active controller samples: %u; button mapping still needs gameplay confirmation.\n",controller_samples);
     std::puts(passthrough ? "Passthrough layer submitted; headset visual confirmation is still required."
                          : "Vulkan session and predicted 6DoF/eye poses verified. Stereo image rendering remains untested.");

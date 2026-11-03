@@ -25,7 +25,7 @@ controller or Quest Touch mapped to Xbox inputs, head tracking via OpenXR.
   Optional room view uses runtime-provided passthrough.
 
 Both modes share one OpenXR/Vulkan core. Touch input emulates a conventional
-Xbox controller; it does not use hand-motion gestures.
+Xbox controller for skating; window placement also supports controller aim/grip.
 
 ## Milestones
 - [x] Windows build and Vulkan gameplay using local game assets.
@@ -47,6 +47,8 @@ Xbox controller; it does not use hand-motion gestures.
   shorter player-focused README; keep build details in the linked guides.
 - [x] Add gamepad window placement/resize and a compact immersive camera editor
   with live world preview, input capture and apply/cancel controls.
+- [x] Add aim-and-grip window movement with either Touch controller, depth/size
+  sticks and a target marker. Geometry/input/GPU tests pass; headset use is pending.
 - [x] Add a Windows installer with selectable game/save paths, optional
   shortcuts, setup without a headset and separate save profiles in the launcher.
   Build and test notes: [PCVR_DISTRIBUTION.md](PCVR_DISTRIBUTION.md).

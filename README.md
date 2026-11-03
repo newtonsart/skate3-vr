@@ -15,7 +15,7 @@ you need your own Xbox 360 copy of Skate 3.
 
 ## Getting started
 
-1. Run **`Skate3-VR-Setup-0.2.2-alpha.exe`** from a Windows package.
+1. Run **`Skate3-VR-Setup-0.2.3-alpha.exe`** from a Windows package.
    Choose the application folder, game files folder and save profiles folder.
    A desktop shortcut is optional; the Start menu shortcut is also available.
 2. Select your own **Skate 3 Xbox 360 ISO**. Setup extracts it with a progress
@@ -60,7 +60,7 @@ can also act as player 1, including menu/settings navigation:
 | Right grip + left Menu | RB + Start: mod settings |
 
 Touch support is experimental and still needs headset gameplay confirmation.
-There are no motion gestures or Touch vibration; the right Meta button keeps
+There are no motion-based skating tricks or Touch vibration; the right Meta button keeps
 its system function. [Controller details and checks](docs/PCVR_CONTROLLERS.md).
 
 | Input | Action |
@@ -79,6 +79,11 @@ Backend → SDL** and restart. [More about settings and camera](docs/PCVR_SETTIN
 In window modes, select **Video → Move window**. The left stick moves it
 left/right and up/down; the right stick moves it closer/farther; **LB/RB** resize
 it. Press **A** to place it or **B** to restore its previous placement.
+With **Quest Touch**, point at the window until a blue marker appears, hold
+that hand's **grip** and move the controller. The marker turns green; release
+to leave the window anchored. While holding, that hand's stick up/down adjusts
+distance; the other hand's stick up/down changes size. **A** confirms and **B**
+cancels. The window stays upright; both window modes support this interaction.
 In immersive mode, **Video → Adjust camera** keeps the world visible while
 the left stick changes camera height and the right stick changes distance.
 Press **A** to apply or **B** to cancel. Both editors use a small panel below

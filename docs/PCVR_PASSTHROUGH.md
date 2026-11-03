@@ -38,6 +38,9 @@ For direct placement, select **Video → Move window**: left stick moves it
 horizontally/vertically, right stick changes distance, LB/RB resize it, A places
 it and B cancels. A compact panel leaves the scene visible while adjusting.
 The window remains anchored during the session; no saved room anchor is needed.
+Touch controllers can also point and grip-drag the panel in **Move window**,
+with a blue/green target marker. The held-hand stick adjusts reach and the
+other stick resizes it; A confirms, B cancels. See [controller placement](PCVR_CONTROLLERS.md#point-and-grab-the-window).
 The existing **Field of View** setting controls the in-game framing in window
 mode. Immersive camera offsets and the headset's eye FOV do not apply there.
 

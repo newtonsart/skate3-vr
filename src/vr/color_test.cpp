@@ -142,6 +142,12 @@ struct TestGpu {
         if(channel<3) {
           expected=color.float32[channel];
           if(parameters.decode_color) expected=expected<=0.04045f ? expected/12.92f : std::pow((expected+0.055f)/1.055f,2.4f);
+          if(parameters.pointer_mode) {
+            const float ring=std::abs(std::hypot((u-parameters.pointer_u)*parameters.aspect,v-parameters.pointer_v)-0.008f);
+            const float mask=1-smooth((ring-1.f/size)/(1.f/size));
+            const float hover[]={0.1f,0.7f,1},held[]={0.1f,1,0.3f};
+            expected=expected*(1-mask)+(parameters.pointer_mode==2 ? held[channel] : hover[channel])*mask;
+          }
           if(parameters.feather>0) expected*=alpha;
         }
         correct &= std::abs(pixels[(y*size+x)*4+channel]/255.f-expected)<2.f/255;
@@ -156,6 +162,11 @@ int main() {
     TestGpu gpu; gpu.Initialize();
     for(uint32_t decode : {0u,1u}) for(float feather : {0.f,0.04f,0.08f}) for(float aspect : {1.f,16.f/9,9.f/16})
       gpu.Run({decode,feather,aspect,0});
-    std::puts("PASS: 18 GPU readbacks; opaque/feathered, gamma toggle, premultiplied alpha and panel aspects");
+    for(uint32_t decode : {0u,1u}) for(float feather : {0.f,0.08f}) for(uint32_t mode : {1u,2u}) {
+      skate3::vr::ColorParameters parameters{decode,feather,16.f/9,0};
+      parameters.pointer_u=0.4f; parameters.pointer_v=0.55f; parameters.pointer_mode=mode;
+      gpu.Run(parameters);
+    }
+    std::puts("PASS: 26 GPU readbacks; color, feathered alpha and hover/grab indicators");
   } catch(const std::exception& error) { std::fprintf(stderr,"%s\n",error.what()); return 1; }
 }

@@ -7,6 +7,10 @@ layout(push_constant) uniform ColorParameters {
     float feather;
     float aspect;
     float padding;
+    float pointerU;
+    float pointerV;
+    uint pointerMode;
+    float pointerPadding;
 } parameters;
 void main() {
     ivec2 p=ivec2(gl_GlobalInvocationID.xy);
@@ -20,6 +24,14 @@ void main() {
         vec3 low=color.rgb/12.92;
         vec3 high=pow((max(color.rgb,vec3(0))+0.055)/1.055,vec3(2.4));
         color.rgb=mix(high,low,lessThanEqual(color.rgb,vec3(0.04045)));
+    }
+    if(parameters.pointerMode!=0) {
+        vec2 offset=(uv-vec2(parameters.pointerU,parameters.pointerV))*vec2(parameters.aspect,1);
+        float ring=abs(length(offset)-0.008);
+        float pixel=1.0/float(size.y);
+        float mask=1-smoothstep(pixel,pixel*2,ring);
+        vec3 tint=parameters.pointerMode==2 ? vec3(0.1,1,0.3) : vec3(0.1,0.7,1);
+        color.rgb=mix(color.rgb,tint,mask);
     }
     if(parameters.feather>0) {
         // Measure in panel-height units, independently of the eye texture's aspect.

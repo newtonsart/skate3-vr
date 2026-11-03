@@ -118,7 +118,7 @@ def apply(sdk):
         editor.label = vr_mode_ == 0 ? "Adjust camera" : "Move window";
         editor.desc = vr_mode_ == 0
             ? "Preview the world while adjusting the camera. Left stick: height; right stick: distance. A applies; B cancels."
-            : "Place the window in space. Left stick: move/height; right stick: distance; LB/RB: size. A places; B cancels.";
+            : "Touch: point at the window, hold grip and move; release to anchor. Held-hand stick: distance; other stick: size. Gamepad: left stick move, right stick distance, LB/RB size. A places; B cancels.";
         editor.action = [this] { rex::cvar::SetFlagByName("skate3_vr_edit_mode", vr_mode_ == 0 ? "2" : "1"); };
         rows.push_back(std::move(editor));
         static constexpr std::array<double, 4> vr_scales = {0.0, 0.75, 1.0, 1.25};

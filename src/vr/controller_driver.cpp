@@ -43,9 +43,11 @@ class VrControllerDriver final : public rex::input::InputDriver {
   X_RESULT GetKeystroke(uint32_t,uint32_t,rex::input::X_INPUT_KEYSTROKE*) override { return X_ERROR_DEVICE_NOT_CONNECTED; }
 };
 }
-void PublishVrControls(const TouchControls& controls) {
+void PublishVrControls(const TouchControls& controls,bool suppress_shoulders) {
   std::lock_guard lock(cache_mutex);
-  const auto sample=MapTouchControls(controls);
+  auto filtered=controls;
+  if(suppress_shoulders) filtered.grip[0]=filtered.grip[1]=0;
+  const auto sample=MapTouchControls(filtered);
   if(sample!=cached) ++packet;
   cached=sample; updated=std::chrono::steady_clock::now();
 }
