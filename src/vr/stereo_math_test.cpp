@@ -6,14 +6,20 @@
 #include "render_resolution.h"
 #include "editor_controls.h"
 #include "window_blend.h"
+#include "hud_backdrop.h"
 #include <algorithm>
 #include <limits>
 #include <cmath>
 #include <stdexcept>
+#include <vector>
 
 void Check(bool condition) { if(!condition) throw std::runtime_error("Stereo matrix check failed"); }
 int main() {
   using namespace skate3::vr;
+  Check(SelectEditorView(true,true,true)==EditorView::Photo);
+  Check(SelectEditorView(true,false,true)==EditorView::Objects);
+  Check(SelectEditorView(true,false,false)==EditorView::Default);
+  Check(SelectEditorView(false,true,true)==EditorView::Default);
   Check(WindowFeather(0,true,0.08)==0 && WindowFeather(1,true,0.08)==0);
   Check(WindowFeather(2,false,0.08)==0 && WindowFeather(2,true,0)==0);
   Check(std::abs(WindowFeather(2,true,0.08)-0.08f)<1e-6f);
@@ -193,7 +199,7 @@ int main() {
   eye.pose.orientation={0,0,0,1}; eye.pose.position={0,0,0};
   for (int e=0;e<2;++e) {
     eye.pose.position.x=e ? 0.032f : -0.032f;
-    skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2,
+    skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,4,
         window_vp[e],window_p[e],window_pos[e]);
     const float* m=window_vp[e];
     Check(std::abs((2*m[8]+m[12])/(2*m[11]+m[15]))<1e-5f);
@@ -209,12 +215,12 @@ int main() {
   Check(disparity(1)>0 && disparity(4)<0);
   const float previous=window_vp[1][0];
   eye.pose.orientation={0,0.7071068f,0,0.7071068f};
-  skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2,
+  skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,4,
       vp,projection,position);
   Check(std::abs(vp[0]-previous)<1e-5f);
   // Head translation cancels in projection at the fixed window plane.
   eye.pose.position={0.3f,0.2f,0.4f};
-  skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2,
+  skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,4,
       vp,projection,position);
   Check(std::abs((2*vp[8]+vp[12])/(2*vp[11]+vp[15]))<1e-5f);
   Check(std::abs((2*vp[9]+vp[13])/(2*vp[11]+vp[15]))<1e-5f);
@@ -248,7 +254,7 @@ int main() {
   rotated_reference.position={3,4,5};
   eye.pose.position={3.4f,4.2f,4.7f};
   skate3::vr::MakeWindowEyeCamera(pitched_vp,p,origin,rotated_reference,eye,1,
-      2,vp,projection,position);
+      4,vp,projection,position);
   const auto clip=[&](int c) { return center[0]*vp[c]+center[1]*vp[4+c]+center[2]*vp[8+c]+vp[12+c]; };
   Check(clip(3)>0 && std::abs(clip(0)/clip(3))<1e-4f && std::abs(clip(1)/clip(3))<1e-4f);
   // With the head centered, the entire desktop frustum (including its edges,
@@ -280,4 +286,69 @@ int main() {
     catch (const std::runtime_error&) { rejected_window=true; }
     Check(rejected_window);
   }
+  // Far-point image disparity is one physical IPD for any screen width/FOV/scale.
+  reference={{0,0,0,1},{0,0,0}};
+  for(float width : {0.5f,2.4f,6.f}) for(float scale : {0.5f,1.f,2.f}) for(float focal : {0.6f,1.f,2.f}) {
+    float game_p[16]; std::copy(p,p+16,game_p); game_p[0]=-focal;
+    float far_x[2];
+    for(int e=0;e<2;++e) {
+      eye.pose.position={e ? 0.032f : -0.032f,0,0};
+      MakeWindowEyeCamera(game_p,game_p,camera,reference,eye,scale,width,vp,projection,position);
+      far_x[e]=(1e6f*vp[8]+vp[12])/(1e6f*vp[11]+vp[15]);
+      const float convergence=focal*width*scale*0.5f;
+      Check(std::abs((convergence*vp[8]+vp[12])/(convergence*vp[11]+vp[15]))<1e-5f);
+    }
+    Check(std::abs((far_x[0]-far_x[1])*width*0.5f+0.064f)<1e-5f);
+  }
+  eye.pose.position={0.032f,0,0};
+  for(float aspect : {1.f,16.f/9,2.4f}) {
+    float far_y[2];
+    for(int e=0;e<2;++e) {
+      eye.pose.position={0,e ? 0.032f : -0.032f,0};
+      MakeWindowEyeCamera(p,p,camera,reference,eye,1,2.4f,vp,projection,position,1,aspect);
+      far_y[e]=(1e6f*vp[9]+vp[13])/(1e6f*vp[11]+vp[15]);
+    }
+    Check(std::abs(std::abs((far_y[0]-far_y[1])*2.4f/aspect*0.5f)-0.064f)<1e-5f);
+  }
+  eye.pose.position={0.032f,0,0};
+  MakeWindowEyeCamera(p,p,camera,reference,eye,1,2.4f,vp,projection,position,0);
+  for(int k=0;k<16;++k) Check(std::abs(vp[k]-p[k])<1e-5f);
+  const auto fixed=WindowPose(reference,2,0.4f,1);
+  for(XrVector3f head : {XrVector3f{0,0,0},XrVector3f{3,2,1},XrVector3f{-2,-1,0}}) {
+    const auto facing=FaceWindowToHead(fixed,head);
+    Check(facing.position.x==fixed.position.x && facing.position.y==fixed.position.y && facing.position.z==fixed.position.z);
+    const auto normal=RotateVector(facing.orientation,{0,0,1});
+    const XrVector3f delta{head.x-fixed.position.x,head.y-fixed.position.y,head.z-fixed.position.z}; const float length=std::sqrt(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z);
+    Check(std::abs(normal.x-delta.x/length)<1e-5f && std::abs(normal.y-delta.y/length)<1e-5f && std::abs(normal.z-delta.z/length)<1e-5f);
+  }
+  float constants[36]{}; constants[0]=constants[5]=constants[10]=constants[15]=1;
+  constants[16]=constants[21]=constants[26]=constants[31]=1;
+  std::fill(constants+32,constants+36,1.f);
+  std::array<uint8_t,4*28> vertices{};
+  const float positions[4][4]={{-1,-1,0,1},{1,-1,0,1},{-1,1,0,1},{1,1,0,1}};
+  for(int i=0;i<4;++i) { std::memcpy(vertices.data()+i*28,positions[i],16); std::fill(vertices.begin()+i*28+24,vertices.begin()+i*28+28,255); }
+  constants[32]=constants[33]=constants[34]=0;
+  const auto fill=DescribeHudQuad(0x29,16,0,constants,vertices,4,28);
+  Check(fill.valid && fill.black && fill.left==-1 && fill.right==1);
+  Check(FullscreenHudBackdrop(fill));
+  Check(!DescribeHudQuad(0x29,16,0,constants,vertices,5,28).valid);
+  std::vector<HudQuad> loading{fill};
+  HudQuad tile; tile.flags=0x0d; tile.source_stride=24; tile.width=tile.height=64;
+  tile.valid=true; tile.left=0.8f; tile.right=0.9f; tile.bottom=-0.9f; tile.top=-0.8f;
+  Check(!FullscreenHudBackdrop(tile));
+  for(int i=0;i<5;++i) loading.push_back(tile);
+  Check(LoadingBackdrop(loading)==0);
+  for(float alpha : {0.f,0.05f,0.35f,0.8f,1.f}) {
+    constants[35]=alpha;
+    vertices[27]=uint8_t(alpha*255);
+    loading[0]=DescribeHudQuad(0x29,16,0,constants,vertices,4,28);
+    Check(LoadingBackdrop(loading)==0 && FullscreenHudBackdrop(loading[0]));
+  }
+  loading[0]=fill;
+  Check(LoadingBackdrop(std::span<const HudQuad>(&fill,1))==-1);
+  loading.back().width=512; Check(LoadingBackdrop(loading)==-1); loading.back()=tile;
+  loading.back().top=0; Check(LoadingBackdrop(loading)==-1); loading.back()=tile;
+  loading[0].black=false; Check(LoadingBackdrop(loading)==-1); loading[0]=fill;
+  loading[0].right=0; Check(LoadingBackdrop(loading)==-1); loading[0]=fill;
+  HudQuad font; loading.push_back(font); Check(LoadingBackdrop(loading)==-1);
 }

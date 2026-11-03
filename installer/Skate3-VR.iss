@@ -2,7 +2,7 @@
   #error Define PayloadDir with the clean, allowlisted package directory.
 #endif
 #ifndef PackageVersion
-  #define PackageVersion "0.2.3-alpha"
+  #define PackageVersion "0.2.4-alpha"
 #endif
 
 [Setup]

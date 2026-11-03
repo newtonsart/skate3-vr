@@ -16,6 +16,7 @@
 #include "editor.h"
 #include "render_resolution.h"
 #include "window_blend.h"
+#include "presentation.h"
 #include "stereo_math.h"
 #include "cull_frustum.h"
 #include "gpu_timing.h"
@@ -56,8 +57,13 @@ REXCVAR_DEFINE_DOUBLE(skate3_vr_window_width, 2.4, "VR", "Stereo window width in
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_distance, 2.0, "VR", "Stereo window distance in meters").range(0.5,8.0);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_height, 0.0, "VR", "Stereo window height relative to recenter in meters").range(-2.0,2.0);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_feather, 0.0, "VR", "Soft window edge width as a fraction of panel height; passthrough only").range(0.0,0.15);
+REXCVAR_DEFINE_BOOL(skate3_vr_window_face_viewer,true,"VR","Rotate the anchored window towards the viewer; hold orientation while dragging");
+REXCVAR_DEFINE_DOUBLE(skate3_vr_window_depth,1.0,"VR","Stereo strength for the 3D window; 0 flat, 0.5 reduced, 1 screen-calibrated").range(0.0,1.0);
+REXCVAR_DEFINE_BOOL(skate3_vr_editor_comfort,true,"VR","Use the original photo camera and a readable window for photo/object editing");
+REXCVAR_DEFINE_BOOL(skate3_vr_clear_hud_backdrop,true,"VR","Remove the captured loading fill/spinner group backdrop over the immersive world");
 REXCVAR_DEFINE_STRING(skate3_vr_status, "", "VR", "Current room-view availability");
 REXCVAR_DEFINE_BOOL(skate3_vr_capture, false, "VR", "Capture one rendered stereo scene to local out/vr-eye-*.ppm");
+REXCVAR_DEFINE_BOOL(skate3_vr_capture_once,false,"VR","Capture the next available VR frame, including frontend/loading menus").debug_only();
 REXCVAR_DEFINE_DOUBLE(skate3_vr_menu_distance, 2.0, "VR", "Menu panel distance in meters");
 REXCVAR_DEFINE_DOUBLE(skate3_vr_menu_width, 2.4, "VR", "Menu panel width in meters");
 REXCVAR_DEFINE_DOUBLE(skate3_vr_hud_width, 1.6, "VR", "Readable HUD panel width in meters").range(0.5,3.0);
@@ -101,8 +107,8 @@ struct State {
   int settings_editor=0;
   float settings_aspect=16.0f/9;
   double render_scale=-1;
-  void UpdateResolution() {
-    const double scale=REXCVAR_GET(skate3_vr_render_scale);
+  void UpdateResolution(bool flat=false) {
+    const double scale=flat ? 0.0 : REXCVAR_GET(skate3_vr_render_scale);
     if (scale==render_scale) return;
     const auto& views=xr.views();
     const auto extent=EyeRenderExtent(std::max(views[0].recommendedImageRectWidth,views[1].recommendedImageRectWidth),
@@ -130,6 +136,9 @@ struct State {
   EyeSwapchain eyes[3];
   XrPosef reference{};
   bool recentered=false;
+  XrQuaternionf window_rotation{0,0,0,1};
+  bool window_rotation_ready=false;
+  EditorView last_editor_view=EditorView::Default;
   bool failed=false;
   uint64_t submitted=0;
   VkBuffer readback=VK_NULL_HANDLE;
@@ -447,7 +456,10 @@ struct State {
         gpu_render_ms[e]=ReadGpuDuration(e*2);
         gpu_copy_ms[e]=ReadGpuDuration(4+e*2);
       }
-      if(capture) SaveCapture(context.guest_output_width,context.guest_output_height,e);
+      if(capture) {
+        try { SaveCapture(context.guest_output_width,context.guest_output_height,e); }
+        catch(const std::exception& error) { REXLOG_WARN("VR: diagnostic capture failed: {}",error.what()); }
+      }
       XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
       {
         auto queue=gpu->AcquireQueue(gpu->queue_family_graphics_compute(),0);
@@ -509,7 +521,7 @@ void InitializeGameVr() {
   if(!REXCVAR_GET(skate3_vr)) return;
   std::lock_guard lock(mutex);
   state=std::make_unique<State>(); state->xr.Initialize(); state->xr.DetectHeadset();
-  state->UpdateResolution();
+  state->UpdateResolution(true);
   rex::cvar::SetFlagByName("skate3_native_render_scene_occlusion_cull", "false");
   rex::cvar::SetFlagByName("skate3_native_render_scene_occlusion_cull_guest", "false");
   rex::cvar::SetFlagByName("skate3_native_render_scene_ssao", "false");
@@ -531,12 +543,8 @@ void RecenterGameVr() {
   if(state) { state->recentered=false; state->capture_done=false; }
 }
 void CaptureGameVr() {
-  std::lock_guard lock(mutex);
-  if (state) {
-    state->capture_done=false;
-    rex::cvar::SetFlagByName("skate3_vr_capture","true");
-    REXLOG_INFO("VR: stereo capture requested");
-  }
+  rex::cvar::SetFlagByName("skate3_vr_capture_once","true");
+  REXLOG_INFO("VR: next-frame capture requested");
 }
 void ToggleGameVrColor() {
   std::lock_guard lock(mutex);
@@ -587,12 +595,22 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
   }
   TrackingFrame frame; bool begun=false;
   try {
-    s.UpdateResolution();
-    if(!s.session) s.Bind(static_cast<rex::ui::vulkan::VulkanDevice*>(vulkan::NativeRhiGetVulkanDevice(input.device)));
     const int mode=REXCVAR_GET(skate3_vr_mode);
-    const bool window=mode!=0;
+    const bool photo=scene && (scene->photo_fx.valid || native_scene::PhotoPresentationActive());
+    const bool object_editor=scene && std::any_of(scene->items.begin(),scene->items.end(),[](const auto& item) { return item.selected; });
+    const auto editor_view=SelectEditorView(REXCVAR_GET(skate3_vr_editor_comfort),photo,object_editor);
+    if(editor_view!=s.last_editor_view) {
+      REXLOG_INFO("VR: editor presentation {} (0 immersive/default, 1 original mono photo camera, 2 stereo object window)",int(editor_view));
+      s.last_editor_view=editor_view;
+    }
+    const bool photo_flat=editor_view==EditorView::Photo;
+    const bool comfort=mode==0 && editor_view!=EditorView::Default;
+    const bool window=mode!=0 || comfort;
+    s.UpdateResolution(!scene || photo_flat);
+    if(!s.session) s.Bind(static_cast<rex::ui::vulkan::VulkanDevice*>(vulkan::NativeRhiGetVulkanDevice(input.device)));
     if (mode!=s.last_mode) {
       s.recentered=false;
+      s.window_rotation_ready=false;
       s.room->Disable();
       rex::cvar::SetFlagByName("skate3_vr_status",mode==0 ? "Immersive VR" : "Stereo window; black background");
       s.last_mode=mode;
@@ -621,6 +639,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     }
     if (REXCVAR_GET(skate3_vr_recenter_requested)) {
       s.recentered=false;
+      s.window_rotation_ready=false;
       rex::cvar::SetFlagByName("skate3_vr_window_horizontal","0");
       rex::cvar::SetFlagByName("skate3_vr_recenter_requested","false");
     }
@@ -633,47 +652,66 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
         REXLOG_INFO("VR: {}",status);
       }
     }
-    const float window_width=float(REXCVAR_GET(skate3_vr_window_width));
-    const float window_distance=float(REXCVAR_GET(skate3_vr_window_distance));
-    const float window_height=float(REXCVAR_GET(skate3_vr_window_height));
+    const float window_width=float(comfort ? REXCVAR_GET(skate3_vr_menu_width) : REXCVAR_GET(skate3_vr_window_width));
+    const float window_distance=float(comfort ? REXCVAR_GET(skate3_vr_menu_distance) : REXCVAR_GET(skate3_vr_window_distance));
+    const float window_height=comfort ? 0.f : float(REXCVAR_GET(skate3_vr_window_height));
     const float aspect=PanelAspect(input.display_width,input.display_height,input.guest_output_width,input.guest_output_height);
     const float feather=WindowFeather(mode,s.room->layer()!=XR_NULL_HANDLE,REXCVAR_GET(skate3_vr_window_feather));
     const bool pause_menu=scene && rex::kernel::guest_presence::GameplayContextValue()==0;
     if (window && !(window_width>=0.5f && window_width<=6 &&
         window_distance>=0.5f && window_distance<=8 && window_height>=-2 && window_height<=2 &&
         aspect>0 && aspect<=10)) throw std::runtime_error("Invalid VR window size/position");
-    PublishVrControls(controls,VrEditorPanelMode()==1);
-    PublishWindowMotion({controls,hands,s.reference,aspect});
     const auto pointer=window && VrEditorPanelMode()==1 ? ReadWindowPointer() : WindowPointer{};
+    auto panel_pose=WindowPose(comfort ? RecenterPose(frame.head.pose) : s.reference,window_distance,window_height,
+        comfort ? 0.f : float(rex::cvar::Query<double>("skate3_vr_window_horizontal")));
+    if(comfort) panel_pose=FaceWindowToHead(panel_pose,frame.head.pose.position);
+    else if(window && REXCVAR_GET(skate3_vr_window_face_viewer)) {
+      if(!pointer.holding || !s.window_rotation_ready) {
+        s.window_rotation=FaceWindowToHead(panel_pose,frame.head.pose.position).orientation;
+        s.window_rotation_ready=true;
+      }
+      panel_pose.orientation=s.window_rotation;
+    }
+    PublishVrControls(controls,VrEditorPanelMode()==1);
+    PublishWindowMotion({controls,hands,s.reference,aspect,panel_pose.orientation});
     if (!settings_visible.load()) s.settings_presented=false;
     XrCompositionLayerProjectionView projections[2]={{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
     bool rendered=false,world_rendered=false,eye_world[2]{};
     auto context=input;
     const auto image=vulkan::NativeRhiGetImage(input.guest_output);
     const auto start=std::chrono::steady_clock::now();
-    s.capture_menu=!scene && s.submitted%600==300;
-    const bool capture=REXCVAR_GET(skate3_vr_capture) && (s.capture_menu ||
-        (!s.capture_done && scene && scene->generation>300 && scene->items.size()>100));
+    const bool capture_now=REXCVAR_GET(skate3_vr_capture_once);
+    if(capture_now) rex::cvar::SetFlagByName("skate3_vr_capture_once","false");
+    s.capture_menu=!scene && (capture_now || s.submitted%600==300);
+    const bool capture=capture_now || (REXCVAR_GET(skate3_vr_capture) && (s.capture_menu ||
+        (!s.capture_done && scene && scene->generation>300 && scene->items.size()>100)));
+    if(capture) REXLOG_INFO("VR: capture layout display={}x{} source={}x{} aspect={:.4f} scene={} menu={} window={} photo={}",
+        input.display_width,input.display_height,input.guest_output_width,input.guest_output_height,aspect,
+        scene?scene->generation:0,s.capture_menu,window,photo);
     double render_ms[2]{},copy_ms[2]{};
     double scene_copy_ms[2]{};
     StereoShadows shadows;
     const bool compare=REXCVAR_GET(skate3_vr_compare_frame_work) && s.perf_samples<600;
     const bool share_work=compare ? s.perf_samples%2==0 : REXCVAR_GET(skate3_vr_share_frame_work);
     const auto scene_copy_start=std::chrono::steady_clock::now();
-    auto render_scene=share_work && scene ? std::make_shared<native_scene::FrameScene>(*scene) : nullptr;
+    auto render_scene=share_work && scene && !photo_flat ? std::make_shared<native_scene::FrameScene>(*scene) : nullptr;
     const double shared_scene_copy_ms=render_scene ?
         std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-scene_copy_start).count() : 0;
     scene_copy_ms[0]=shared_scene_copy_ms;
-    for(int eye=0;eye<2;++eye) {
+    // Photo capture/card composition is a mono game operation, not two eye-side effects.
+    for(int eye=0;eye<(photo_flat ? 1 : 2);++eye) {
       if(eye) context.cmd=vulkan::NativeRhiBeginFrame(context.device,image.image,image.view,true,context.guest_output_width,context.guest_output_height,&context.guest_output);
       EyeCamera camera; camera.scene=scene; camera.eye_index=eye;
       camera.shadows=share_work ? &shadows : nullptr;
       camera.render_scene=render_scene;
-      if(scene && !scene->items.empty() && scene->proj[0]!=0) {
+      camera.clear_hud_backdrop=!window && !photo && !object_editor && REXCVAR_GET(skate3_vr_clear_hud_backdrop);
+      camera.capture_ui=capture && eye==0;
+      if(scene && !scene->items.empty() && scene->proj[0]!=0 && !photo_flat) {
         if (window) {
-          MakeWindowEyeCamera(scene->view_proj,scene->proj,scene->cam_pos,s.reference,frame.eyes[eye],
-              float(REXCVAR_GET(skate3_vr_world_scale)),window_distance,
-              camera.view_proj,camera.proj,camera.position);
+          const XrPosef view_reference{panel_pose.orientation,frame.head.pose.position};
+          MakeWindowEyeCamera(scene->view_proj,scene->proj,scene->cam_pos,view_reference,frame.eyes[eye],
+              float(REXCVAR_GET(skate3_vr_world_scale)),window_width,
+              camera.view_proj,camera.proj,camera.position,float(REXCVAR_GET(skate3_vr_window_depth)),aspect);
         } else {
           MakeEyeCamera(scene->view_proj,scene->proj,scene->cam_pos,s.reference,frame.eyes[eye],float(REXCVAR_GET(skate3_vr_world_scale)),camera.view_proj,camera.proj,camera.position,
               float(REXCVAR_GET(skate3_vr_camera_distance)),float(REXCVAR_GET(skate3_vr_camera_height)));
@@ -733,12 +771,10 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       }
       XrCompositionLayerQuad panels[2]={{XR_TYPE_COMPOSITION_LAYER_QUAD},{XR_TYPE_COMPOSITION_LAYER_QUAD}};
       if (window) {
-        const auto pose=WindowPose(s.reference,window_distance,window_height,
-            float(rex::cvar::Query<double>("skate3_vr_window_horizontal")));
         for (int eye=0;eye<(world_rendered?2:1);++eye) {
           auto& panel=panels[eye];
           if(feather>0) panel.layerFlags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-          panel.space=s.session->local_space(); panel.pose=pose;
+          panel.space=s.session->local_space(); panel.pose=panel_pose;
           panel.size={window_width,window_width/aspect};
           panel.eyeVisibility=world_rendered ? (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT) : XR_EYE_VISIBILITY_BOTH;
           panel.subImage=projections[world_rendered ? eye : flat_eye].subImage;
@@ -790,6 +826,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
             s.gpu_render_ms[0],s.gpu_render_ms[1],s.gpu_copy_ms[0],s.gpu_copy_ms[1],scene_copy_ms[0],scene_copy_ms[1],share_work);
       }
     } else { s.session->EndFrame(frame); begun=false; }
+    if(!rendered && capture_now) rex::cvar::SetFlagByName("skate3_vr_capture_once","true");
     return rendered;
   } catch(const std::exception& error) {
     PublishVrControls({});

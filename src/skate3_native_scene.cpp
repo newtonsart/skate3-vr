@@ -2926,6 +2926,7 @@ bool PhotoCardVisible() {
                              .count();
   return now_ns - seen < 250'000'000;
 }
+bool PhotoPresentationActive() { return g_photo_flow_frame.load(std::memory_order_relaxed); }
 
 // Debug-path classification, cached per shader object (guest render thread
 // only, like the blur classifier). -1 = not a photo postfx shader.

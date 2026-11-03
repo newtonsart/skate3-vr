@@ -35,12 +35,54 @@ the edge can also fade; choose Sharp to retain the full border. The setting
 applies immediately and is saved per profile. Without active passthrough,
 the window remains opaque. It does not add room geometry, occlusion or lighting.
 
+**VR Window Depth** offers Natural (default), Reduced and Flat. Natural calibrates
+binocular disparity to the physical window width, its aspect and the game FOV,
+rather than using window distance as the game-space convergence distance.
+Reduced halves stereo disparity; Flat renders the original camera in both eyes.
+The head centre remains the stereo reference so walking does not steer the game
+camera. The full desktop framing is retained.
+
+**VR Window Faces You** defaults on. It turns the panel towards the tracked head
+position, including height, without moving its centre or adding roll. Orientation
+is held during a grip drag; facing resumes on release. Off retains the recentered
+orientation. The pointer uses the same actual panel rotation for hit testing.
+
+**VR Editor Comfort View** defaults on. Photo capture/editor/card flows use one
+original-camera render, preserving the game's screenshot and postfx framing.
+In immersive mode they appear in a readable front window. Selected park-editor /
+object-mover meshes trigger a stereo front window with the original game camera
+orientation, so placement markers and UI retain their desktop relationship.
+It returns to the chosen mode when that flow ends. Ordinary pause is unchanged.
+Off provides the previous presentation for comparison. Detection of an object
+editor relies on its selected-mesh signal; menus with no selected object may
+retain the normal HUD view.
+
+**VR Loading Symbol Only** defaults on in immersive gameplay. It removes the
+captured loading group’s full-screen solid black fill, including fade-in/out,
+while replaying the spinner tiles unchanged. Recognition checks the draw layout,
+screen coverage and the small lower-right spinner group; unrelated solid fades
+and ordinary menus are retained. Off restores the original loading backdrop.
+
+Full-screen solid dim/fade fills are also kept at full eye coverage, rather than
+shrunk into the readable HUD panel. This avoids a floating semi-opaque rectangle
+in saving-video and other modal overlays. Text and controls keep their readable
+panel transform; the game’s backdrop colour/opacity are preserved.
+
 **VR Render Resolution** offers Desktop (compatibility), HMD 75%, HMD 100% and
 HMD 125%. The HMD choices size the source render target from OpenXR's recommended
 eye dimensions, independently of the desktop output resolution. The HUD and
 window retain the display's logical aspect. HMD 100% is the first quality setting
 to compare; Desktop restores the original path. See [PCVR_IMAGE_QUALITY.md](PCVR_IMAGE_QUALITY.md)
 for measured dimensions and validation limits.
+Flat frontend/loading screens and original-camera photo flows temporarily use
+the desktop render extent. This avoids compressing their original UI into a
+portrait eye target. The chosen HMD resolution is restored for stereo gameplay;
+the saved quality preference is not changed.
+
+**Capture VR frame** under Video (or Ctrl+F7 with the game focused) captures
+the next available game frame, including flat menus and loading screens.
+It saves local `out/vr-menu-*.ppm` or `out/vr-eye-*.ppm` files next to the running
+application’s working directory. This contains the game image, not camera passthrough.
 
 ## Live window and camera editors
 
@@ -69,7 +111,8 @@ for grabbing inside this editor; regular-gamepad LB/RB still resize normally.
 Tracking/focus loss releases the grab and requires a fresh grip after recovery.
 See [controller placement and validation](PCVR_CONTROLLERS.md#point-and-grab-the-window).
 
-The window stays upright and anchored in LOCAL space while you adjust it.
+The window centre stays anchored in LOCAL space while you adjust it; automatic
+facing can rotate it towards the head, and grip dragging holds its current rotation.
 Horizontal displacement is session-only; no persistent room anchor is created.
 Ctrl+F8 clears that horizontal offset and recenters the window in front of you.
 Movement is limited to ±8 m horizontally, ±2 m vertically, 0.5–8 m distance
@@ -169,3 +212,29 @@ Still required: headset checks of both menus, legibility and depth, moving the
 head while paused, adjusting/saving/reopening settings with a controller, and
 pause/load/unpause transitions. The user could not provide a headset test during
 this implementation; no visual headset success is claimed.
+
+Follow-up on 2026-11-03 after a roughly 15-minute user test: the user reported
+good basic operation, but uncomfortable window depth, an opaque loading patch,
+and awkward photo/object UI. The new window math checks horizontal and vertical
+far disparity against IPD across screen widths, FOVs, aspects and world scales;
+it also checks unchanged centre framing, Flat mode and facing towards the head.
+Pointer tests include an off-centre grab on a tilted, viewer-facing panel.
+Editor-policy and loader-group tests cover defaults, photo priority, geometry
+bounds, all fade phases, unrelated fills, small sprites and ordinary menu content.
+SDK patch/idempotency checks pass. The game’s HUD pixel shader remains unchanged;
+loading cleanup and full-screen backdrop placement happen in the draw replay.
+
+The Meta runtime now reports a Quest 3 and passthrough support. An installed
+trial was opened with the user's existing game/save folders and submitted
+live stereo gameplay frames without logging a VR-render shutdown. The prior
+binaries and settings were backed up locally before replacement. The user
+confirmed improved window depth and viewer-facing rotation, then confirmed the
+flat-menu aspect correction. Actual readbacks show the original squeezed
+2272×2464 loading source and a correct full-frame 2560×1440 frontend after the fix;
+stereo gameplay restores the user’s chosen HMD extent. The loader draw trace
+identified its solid fill and spinner sequence; the runtime logs its removal.
+The first filter missed the loading fill’s fade phases; all phases are now
+handled, and generic modal backdrops use full eye coverage. The user confirmed
+that the loading animation and saving-video overlays both look better in the
+final installed trial. Broader photo-mission/object-editor flows still need
+testing; this does not claim every game menu has been validated.

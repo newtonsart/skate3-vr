@@ -67,10 +67,11 @@ def apply(sdk):
          "  float vr_camera_distance_ = 0, vr_camera_height_ = 0, vr_world_scale_ = 1;\n"
          "  float vr_hud_width_ = 1.6f, vr_hud_distance_ = 2.0f;\n"
          "  bool vr_pause_in_world_ = true;\n"
-         "  int vr_window_edges_index_ = 0;")
+         "  int vr_window_edges_index_ = 0, vr_window_depth_index_ = 2;\n"
+         "  bool vr_window_face_viewer_ = true, vr_editor_comfort_ = true, vr_clear_hud_backdrop_ = true;")
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          "constexpr std::array<std::string_view, 24> kOptionalSimpleSettingsCvars = {",
-         "constexpr std::array<std::string_view, 36> kOptionalSimpleSettingsCvars = {")
+         "constexpr std::array<std::string_view, 40> kOptionalSimpleSettingsCvars = {")
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          '    "user_language"};',
          '    "user_language",\n'
@@ -85,6 +86,10 @@ def apply(sdk):
          '    "skate3_vr_hud_distance",\n'
          '    "skate3_vr_pause_in_world",\n'
          '    "skate3_vr_render_scale",\n'
+         '    "skate3_vr_window_face_viewer",\n'
+         '    "skate3_vr_window_depth",\n'
+         '    "skate3_vr_editor_comfort",\n'
+         '    "skate3_vr_clear_hud_backdrop",\n'
          '    "skate3_vr_window_feather"};')
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          '    case 0: {  // Video\n      header("Display");',
@@ -194,6 +199,38 @@ def apply(sdk):
           SaveSimpleSettingsConfig(config_path_);
         };
         rows.push_back(std::move(edges));
+        static constexpr std::array<double, 3> depths = {0.0, 0.5, 1.0};
+        const double depth = rex::cvar::Query<double>("skate3_vr_window_depth");
+        vr_window_depth_index_ = 0;
+        for(int i = 1; i < 3; ++i)
+          if(std::abs(depths[i]-depth) < std::abs(depths[vr_window_depth_index_]-depth)) vr_window_depth_index_ = i;
+        RowSpec stereo;
+        stereo.label = "VR Window Depth";
+        stereo.desc = "Natural gives the full 3D effect. Choose Reduced for gentler depth or Flat for a 2D screen. Framing stays the same.";
+        stereo.options = {"Flat", "Reduced", "Natural"}; stereo.index = &vr_window_depth_index_; stereo.enabled = vr_mode_ != 0;
+        stereo.on_enum_change = [this](int value) {
+          vr_window_depth_index_ = value;
+          rex::cvar::SetFlagByName("skate3_vr_window_depth", std::to_string(depths[value]));
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        stereo.reset = [this] { vr_window_depth_index_ = 2; rex::cvar::SetFlagByName("skate3_vr_window_depth", "1"); SaveSimpleSettingsConfig(config_path_); };
+        rows.push_back(std::move(stereo));
+        auto vr_toggle = [&](const char* label, const char* name, bool* value, bool enabled, const char* description) {
+          *value = rex::cvar::Query<bool>(name);
+          RowSpec toggle; toggle.label = label; toggle.desc = description;
+          toggle.options = {"Off", "On"}; toggle.flag = value; toggle.enabled = enabled;
+          toggle.on_enum_change = [this, name, value](int option) {
+            *value = option != 0; rex::cvar::SetFlagByName(name, option ? "true" : "false"); SaveSimpleSettingsConfig(config_path_);
+          };
+          toggle.reset = [this, name, value] { *value = true; rex::cvar::SetFlagByName(name, "true"); SaveSimpleSettingsConfig(config_path_); };
+          rows.push_back(std::move(toggle));
+        };
+        vr_toggle("VR Window Faces You", "skate3_vr_window_face_viewer", &vr_window_face_viewer_, vr_mode_ != 0,
+                  "Turn the anchored panel towards your head without moving its centre. Orientation is held while gripping the window.");
+        vr_toggle("VR Editor Comfort View", "skate3_vr_editor_comfort", &vr_editor_comfort_, true,
+                  "Use a readable desktop-framed window for photo/object editing. Photo capture uses the original game camera; ordinary pause stays over the stereo world.");
+        vr_toggle("VR Loading Symbol Only", "skate3_vr_clear_hud_backdrop", &vr_clear_hud_backdrop_, vr_mode_ == 0,
+                  "Show the loading spinner over the game world without its black rectangle, including fade-in and fade-out. Other menus and fades keep their backgrounds.");
         header("VR Camera and HUD");
         vr_pause_in_world_ = rex::cvar::Query<bool>("skate3_vr_pause_in_world");
         RowSpec pause;
@@ -226,6 +263,13 @@ def apply(sdk):
         recenter.desc = "Look forward and confirm to recenter head tracking and place the window in front of you.";
         recenter.action = [] { rex::cvar::SetFlagByName("skate3_vr_recenter_requested", "true"); };
         rows.push_back(std::move(recenter));
+        if (HasCvar("skate3_vr_capture_once")) {
+          RowSpec capture;
+          capture.kind = RowSpec::kAction; capture.label = "Capture VR frame";
+          capture.desc = "Save the next game image from the headset, including frontend/loading screens, for visual troubleshooting.";
+          capture.action = [] { rex::cvar::SetFlagByName("skate3_vr_capture_once", "true"); };
+          rows.push_back(std::move(capture));
+        }
       }
       header("Display");''')
 

@@ -52,11 +52,22 @@ XrPosef WindowPose(const XrPosef& reference,float distance,float height,float ho
   pose.position.x+=offset.x; pose.position.y+=offset.y; pose.position.z+=offset.z;
   return pose;
 }
+XrPosef FaceWindowToHead(XrPosef window,XrVector3f head) {
+  const float x=head.x-window.position.x,y=head.y-window.position.y,z=head.z-window.position.z;
+  const float horizontal=std::hypot(x,z);
+  if(!std::isfinite(horizontal) || !std::isfinite(y) || std::hypot(horizontal,y)<0.25f) return window;
+  const float yaw=std::atan2(x,z)*0.5f,pitch=-std::atan2(y,horizontal)*0.5f;
+  window.orientation={std::cos(yaw)*std::sin(pitch),std::sin(yaw)*std::cos(pitch),
+      -std::sin(yaw)*std::sin(pitch),std::cos(yaw)*std::cos(pitch)};
+  return window;
+}
 void MakeWindowEyeCamera(const float* vp,const float* proj,const float* camera,
                          const XrPosef& reference,const XrView& eye,float scale,
-                         float distance,
-                         float* output,float* projection,float* position) {
-  if (!std::isfinite(scale) || scale<=0 || !std::isfinite(distance) || distance<0.5f)
+                         float width,
+                         float* output,float* projection,float* position,float depth_strength,float panel_aspect) {
+  if (!std::isfinite(scale) || scale<=0 || !std::isfinite(width) || width<0.5f ||
+      !std::isfinite(depth_strength) || depth_strength<0 || depth_strength>1 || !std::isfinite(proj[0]) || std::abs(proj[0])<1e-5f ||
+      !std::isfinite(proj[5]) || std::abs(proj[5])<1e-5f || !std::isfinite(panel_aspect) || panel_aspect<0)
     throw std::runtime_error("Invalid stereo window");
   float inverse[16],game_view[16]; Invert(proj,inverse); Multiply(vp,inverse,game_view);
   const auto& q=reference.orientation;
@@ -64,28 +75,33 @@ void MakeWindowEyeCamera(const float* vp,const float* proj,const float* camera,
       eye.pose.position.y-reference.position.y,eye.pose.position.z-reference.position.z});
   if (!std::isfinite(offset.x) || !std::isfinite(offset.y) || !std::isfinite(offset.z))
     throw std::runtime_error("Invalid stereo window eye pose");
+  offset.x*=depth_strength; offset.y*=depth_strength; offset.z*=depth_strength;
   // Preserve the game's full camera orientation. Head rotation changes how
   // the physical panel is viewed, without rotating the in-game camera.
   float axes[3][3];
   for (int a=0;a<3;++a) for (int k=0;k<3;++k)
     axes[a][k]=game_view[k*4+a]*(a==1 ? 1.0f : -1.0f);
-  const float delta[3]={offset.x,offset.y,offset.z};
+  const float vertical_scale=panel_aspect>0 ? scale*std::abs(proj[0]/proj[5])*panel_aspect : scale;
+  const float delta[3]={offset.x*scale,offset.y*vertical_scale,offset.z*scale};
   for (int k=0;k<3;++k) {
     position[k]=camera[k];
-    for (int a=0;a<3;++a) position[k]+=axes[a][k]*delta[a]*scale;
+    for (int a=0;a<3;++a) position[k]+=axes[a][k]*delta[a];
   }
   float view[16]{}; view[15]=1;
   for (int a=0;a<3;++a) {
     for (int k=0;k<3;++k) view[k*4+a]=axes[a][k];
     view[12+a]=-(position[0]*axes[a][0]+position[1]*axes[a][1]+position[2]*axes[a][2]);
   }
-  const float depth=std::max(0.1f,distance+offset.z);
+  // Calibrate the game convergence plane to the physical screen width/FOV.
+  // At infinity the image disparity is exactly the viewer's IPD, independent of screen distance.
+  const float convergence=std::abs(proj[0])*width*scale*0.5f;
+  const float depth=std::max(convergence*0.1f,convergence+offset.z*scale);
   // Fit the desktop view inside the panel; its physical size must not crop the game FOV.
   for (int r=0;r<4;++r) for (int c=0;c<4;++c)
     projection[r*4+c]=proj[r*4+c]*((r==0 || r==2) ? -1.0f : 1.0f);
-  projection[0]*=depth/distance; projection[5]*=depth/distance;
-  projection[8]-=projection[0]*offset.x/depth;
-  projection[9]-=projection[5]*offset.y/depth;
+  projection[0]*=depth/convergence; projection[5]*=depth/convergence;
+  projection[8]-=projection[0]*offset.x*scale/depth;
+  projection[9]-=projection[5]*offset.y*vertical_scale/depth;
   Multiply(view,projection,output);
 }
 void MakeHudTransform(const XrPosef& head,const XrView& eye,const float* projection,

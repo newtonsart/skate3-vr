@@ -13,6 +13,8 @@ struct EyeCamera {
   std::shared_ptr<native_scene::FrameScene> render_scene;
   float view_proj[16]{}, proj[16]{}, position[3]{};
   bool override_camera = false;
+  bool clear_hud_backdrop = false;
+  bool capture_ui = false;
   int eye_index = 0;
   float hud_transform[4]={1,1,0,0};
   StereoShadows* shadows=nullptr;

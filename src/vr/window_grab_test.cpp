@@ -53,6 +53,7 @@ int main() {
   // Bounds, rotated LOCAL coordinates and off-centre anchors.
   grab.Reset(); values={}; frame={}; frame.controls.connected=true; frame.hands.aim[0].valid=true;
   frame.reference.orientation={0,0.7071068f,0,0.7071068f}; frame.hands.aim[0].pose.orientation=frame.reference.orientation;
+  frame.window_rotation=frame.reference.orientation;
   frame.hands.aim[0].pose.position=RotateVector(frame.reference.orientation,{0.6f,0,0});
   pointer=grab.Update(frame,values,0.01f); Check(pointer.hand==0 && Near(pointer.u,0.75f));
   frame.controls.grip[0]=1; grab.Update(frame,values,0.01f); Check(Near(values.horizontal,0));
@@ -72,6 +73,17 @@ int main() {
   frame.hands.aim[0].pose.position.x=std::numeric_limits<float>::infinity();
   Check(!grab.Update(frame,values,0.01f).holding);
   // The existing editor transaction still owns cancel/apply after motion updates.
+  grab.Reset(); values={}; values.horizontal=1; values.height=0.4f;
+  frame={}; frame.controls.connected=true; frame.hands.aim[0].valid=true;
+  const auto facing=FaceWindowToHead(WindowPose(frame.reference,2,0.4f,1),{0,0,0});
+  frame.window_rotation=facing.orientation;
+  const auto anchor=RotateVector(facing.orientation,{0.6f,0.135f,0});
+  const XrVector3f target{facing.position.x+anchor.x,facing.position.y+anchor.y,facing.position.z+anchor.z};
+  frame.hands.aim[0].pose.orientation=FaceWindowToHead(origin,{-target.x,-target.y,-target.z}).orientation;
+  grab.Update(frame,values,0.01f); frame.controls.grip[0]=1; grab.Update(frame,values,0.01f);
+  Check(grab.holding() && Near(values.horizontal,1) && Near(values.height,0.4f));
+  frame.hands.aim[0].pose.position.x=0.2f; grab.Update(frame,values,0.01f);
+  Check(Near(values.horizontal,1.2f) && Near(values.height,0.4f));
   frame={}; frame.controls.connected=true; frame.hands.aim[0].valid=true; grab.Reset();
   EditorControls editor; editor.Begin(EditorMode::Window,{}); editor.Update({},0.01f);
   frame.controls.grip[0]=0; grab.Update(frame,editor.current,0.01f);

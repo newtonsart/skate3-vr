@@ -15,7 +15,7 @@ you need your own Xbox 360 copy of Skate 3.
 
 ## Getting started
 
-1. Run **`Skate3-VR-Setup-0.2.3-alpha.exe`** from a Windows package.
+1. Run **`Skate3-VR-Setup-0.2.4-alpha.exe`** from a Windows package.
    Choose the application folder, game files folder and save profiles folder.
    A desktop shortcut is optional; the Start menu shortcut is also available.
 2. Select your own **Skate 3 Xbox 360 ISO**. Setup extracts it with a progress
@@ -83,11 +83,19 @@ With **Quest Touch**, point at the window until a blue marker appears, hold
 that hand's **grip** and move the controller. The marker turns green; release
 to leave the window anchored. While holding, that hand's stick up/down adjusts
 distance; the other hand's stick up/down changes size. **A** confirms and **B**
-cancels. The window stays upright; both window modes support this interaction.
+cancels. Both window modes support this interaction. The window turns towards
+your head while its centre stays anchored; its orientation is held while grabbing.
+Use **Video → VR Window Faces You** to disable this, or **VR Window Depth →
+Reduced** for gentler stereo. **Natural** calibrates depth to screen size and game FOV.
 In immersive mode, **Video → Adjust camera** keeps the world visible while
 the left stick changes camera height and the right stick changes distance.
 Press **A** to apply or **B** to cancel. Both editors use a small panel below
 the scene and reserve the gamepad controls until you return to settings.
+**VR Editor Comfort View** temporarily uses a desktop-framed window for photo
+and object-selection editing. Photos use the original game camera; ordinary
+pause stays over the immersive world. These options can be changed under Video.
+Frontend/loading menus retain their original aspect. **VR Loading Symbol Only**
+removes the loading icon’s black backdrop over the immersive world.
 
 ## Image quality
 
@@ -114,7 +122,7 @@ If Meta does not expose passthrough, the window uses a black background.
 For a softer transition into your room, open **Video → VR Window Edges** and
 choose **Soft** or **Wide**. **Sharp** restores the rectangular edge. This only
 applies with active passthrough; the centre stays opaque and stereoscopic.
-**The camera background still needs headset validation in this project.**
+**Passthrough remains experimental and depends on support from the PC runtime.**
 [Passthrough setup and diagnostics](docs/PCVR_PASSTHROUGH.md).
 
 ## Saves and settings

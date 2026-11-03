@@ -9,6 +9,7 @@ struct WindowMotionFrame {
   ControllerHands hands;
   XrPosef reference{{0,0,0,1},{0,0,0}};
   float aspect=16.f/9;
+  XrQuaternionf window_rotation{0,0,0,1};
 };
 struct WindowPointer {
   int hand=-1;
@@ -43,7 +44,8 @@ class WindowGrab {
   bool holding() const { return hand_>=0; }
   WindowPointer Update(const WindowMotionFrame& frame,EditorValues& values,float dt) {
     WindowPointer pointer;
-    if(!ValidPointerPose(frame.reference) || !(frame.aspect>0 && frame.aspect<=10)) { Reset(); return pointer; }
+    if(!ValidPointerPose(frame.reference) || !ValidPointerPose({frame.window_rotation,{0,0,0}}) ||
+        !(frame.aspect>0 && frame.aspect<=10)) { Reset(); return pointer; }
     const auto valid=[&](int hand) { return frame.controls.connected && frame.hands.aim[hand].valid &&
         ValidPointerPose(frame.hands.aim[hand].pose); };
     bool pressed[2]{};
@@ -54,7 +56,8 @@ class WindowGrab {
       if(pressed[hand]) ready_[hand]=false;
     }
     if(hand_>=0 && (!valid(hand_) || ControllerAxis(frame.controls.grip[hand_])<=0.35f)) hand_=-1;
-    const auto pose=WindowPose(frame.reference,values.distance,values.height,values.horizontal);
+    auto pose=WindowPose(frame.reference,values.distance,values.height,values.horizontal);
+    pose.orientation=frame.window_rotation;
     float nearest=13;
     bool selected_pressed=false;
     for(int hand=1;hand>=0;--hand) {
@@ -75,9 +78,10 @@ class WindowGrab {
       const auto& aim=frame.hands.aim[hand_].pose;
       const auto direction=RotateVector(aim.orientation,{0,0,-1});
       const XrVector3f hit{aim.position.x+direction.x*distance_,aim.position.y+direction.y*distance_,aim.position.z+direction.z*distance_};
-      const auto local=InverseRotate(frame.reference.orientation,Subtract(hit,frame.reference.position));
-      values.horizontal=std::clamp(local.x-(anchor_u_-0.5f)*values.width,-8.f,8.f);
-      values.height=std::clamp(local.y-(0.5f-anchor_v_)*values.width/frame.aspect,-2.f,2.f);
+      const auto anchor=RotateVector(pose.orientation,{(anchor_u_-0.5f)*values.width,(0.5f-anchor_v_)*values.width/frame.aspect,0});
+      const auto local=InverseRotate(frame.reference.orientation,Subtract(Subtract(hit,anchor),frame.reference.position));
+      values.horizontal=std::clamp(local.x,-8.f,8.f);
+      values.height=std::clamp(local.y,-2.f,2.f);
       values.distance=std::clamp(-local.z,0.5f,8.f);
       pointer={hand_,true,anchor_u_,anchor_v_};
     }

@@ -60,6 +60,7 @@
 #include "skate3_native_scene_gpu_internal.h"
 #if SKATE3_HAS_OPENXR
 #include "vr/game_vr.h"
+#include "vr/hud_backdrop.h"
 #include "vr/presentation.h"
 #endif
 
@@ -11318,9 +11319,27 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
       scene_2d = g_scene_2d;
     }
     if (!scene_2d.empty()) {
+#if SKATE3_HAS_OPENXR
+      int loading_backdrop=-1;
+      if(user_data) {
+        const auto& eye=*static_cast<skate3::vr::EyeCamera*>(user_data);
+        if(eye.override_camera && eye.clear_hud_backdrop) {
+          std::vector<skate3::vr::HudQuad> quads; quads.reserve(scene_2d.size());
+          for(const auto& draw:scene_2d) quads.push_back(skate3::vr::DescribeHudQuad(draw.flags,draw.src_stride,draw.fetch[2],draw.consts,draw.verts,draw.count,draw.stride));
+          loading_backdrop=skate3::vr::LoadingBackdrop(quads);
+          if(loading_backdrop>=0) {
+            static std::atomic<uint32_t> removed{0};
+            if(removed.fetch_add(1)==0) REXLOG_INFO("VR: removed captured loading fill; spinner tiles preserved");
+          }
+        }
+      }
+#endif
       cmd->SetPipeline(g_r.pso_2d);
       // One shared draw routine for both the RTT passes and the screen pass.
       // ui_region/ui_offset continue after the spline pass's allocations.
+#if SKATE3_HAS_OPENXR
+      uint32_t vr_ui_logged=0;
+#endif
       // yuv != nullptr redirects this draw to the FMV combine: pso_yuv2d
       // with the three movie plane views on params 1/2/5 (t0/t1/t4), the
       // quad's own geometry/transform (so windowed movies place exactly).
@@ -11364,9 +11383,21 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
         const bool ortho = d.consts[12] == 0.0f && d.consts[13] == 0.0f &&
                            d.consts[14] == 0.0f && d.consts[15] == 1.0f;
 #if SKATE3_HAS_OPENXR
+        if(user_data && static_cast<skate3::vr::EyeCamera*>(user_data)->capture_ui && vr_ui_logged++<48) {
+          const auto shape=skate3::vr::DescribeHudQuad(d.flags,d.src_stride,d.fetch[2],d.consts,d.verts,d.count,d.stride);
+          REXLOG_INFO("VR UI capture: flags={:X} source-stride={} vertices={} texture={}x{} ortho={} color={:.3f},{:.3f},{:.3f},{:.3f} bounds={:.3f},{:.3f},{:.3f},{:.3f}",
+              d.flags,d.src_stride,d.count,(d.fetch[2]&8191)+1,((d.fetch[2]>>13)&8191)+1,ortho,
+              d.consts[32],d.consts[33],d.consts[34],d.consts[35],
+              shape.left,shape.bottom,shape.right,shape.top);
+        }
         if (ortho && user_data) {
           const auto& eye = *static_cast<skate3::vr::EyeCamera*>(user_data);
-          if (eye.override_camera) for (int k=0;k<4;++k) {
+          const bool backdrop=skate3::vr::FullscreenHudBackdrop(skate3::vr::DescribeHudQuad(
+              d.flags,d.src_stride,d.fetch[2],d.consts,d.verts,d.count,d.stride));
+          // Screen dim/fade fills belong over the whole view, not inside the readable HUD panel.
+          if(eye.override_camera && backdrop && wide_2d_scale!=1.0f)
+            for(int k=0;k<4;++k) constants[k]/=wide_2d_scale;
+          if (eye.override_camera && !backdrop) for (int k=0;k<4;++k) {
             constants[k] = constants[k]*eye.hud_transform[0] + constants[12+k]*eye.hud_transform[2];
             constants[4+k] = constants[4+k]*eye.hud_transform[1] + constants[12+k]*eye.hud_transform[3];
           }
@@ -11485,6 +11516,9 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
       };
       bool movie_drawn = false;
       for (const Draw2d& d : scene_2d) {
+#if SKATE3_HAS_OPENXR
+        if(loading_backdrop>=0 && &d==&scene_2d[size_t(loading_backdrop)]) continue;
+#endif
         nrhi::TextureView* const* yuv = nullptr;
         // Video-quad detection runs regardless of movie_sub: a quad whose
         // own fetch slots form a YUV triple must NEVER draw through ps_main

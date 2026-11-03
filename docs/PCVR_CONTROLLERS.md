@@ -64,8 +64,10 @@ Bindings follow the [Khronos Oculus Touch interaction profile](https://registry.
    **A** confirms the entire edit; **B** restores the position/size from before
    opening Move window.
 
-The panel stays upright with its existing orientation and aspect. It is not
-rotated freely or stretched with two hands. The normal editor limits apply.
+The panel retains its aspect. With **VR Window Faces You** on, it faces the head
+without moving its centre; gripping holds that orientation until release. Hit
+testing and the grabbed-point offset use the panel's actual rotation, including
+tilt. It is not rotated freely or stretched with two hands. Normal editor limits apply.
 If both controllers point at it, the hand making a fresh grip press wins over
 an idle pointer. Grip uses 65% press / 35% release thresholds. A missed press,
 an opening grip or a grip held while tracking returns cannot acquire the window;

@@ -49,6 +49,11 @@ Xbox controller for skating; window placement also supports controller aim/grip.
   with live world preview, input capture and apply/cancel controls.
 - [x] Add aim-and-grip window movement with either Touch controller, depth/size
   sticks and a target marker. Geometry/input/GPU tests pass; headset use is pending.
+- [x] Calibrate window stereo to screen width/FOV, add viewer-facing rotation,
+  and provide comfort presentation for photo/object editing. Recognize the
+  loading fill/spinner group and retain full coverage for modal dim/fade fills.
+  Depth, facing, menu aspect, loading fades and video-save overlays are user-confirmed.
+  Broader photo/object-editor flows remain under test.
 - [x] Add a Windows installer with selectable game/save paths, optional
   shortcuts, setup without a headset and separate save profiles in the launcher.
   Build and test notes: [PCVR_DISTRIBUTION.md](PCVR_DISTRIBUTION.md).

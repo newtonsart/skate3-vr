@@ -125,12 +125,21 @@ headset remain unverified.
 Gameplay renders the same scene independently for both eyes, preserving the
 desktop game camera's pitch, yaw, field of view and clipping planes. Each eye
 uses a parallel camera with an off-axis stereo shift from its tracked position.
-The centered head reproduces the desktop view matrix/projection exactly after
-coordinate conversion; the physical panel bounds no longer replace the game
-FOV. Head rotation changes the view of the panel; translation adds parallax
-within the scene. The convergence plane is `window distance × world scale`
-game units from the original camera. HUD and frontend/pause menus fit the
+The head centre reproduces the desktop view matrix/projection exactly after
+coordinate conversion; physical panel bounds do not replace the game FOV.
+Binocular offsets use the current head centre and panel orientation. Moving
+the head no longer translates the in-game camera. The calibrated convergence
+plane is `abs(game projection m00) × window width × world scale / 2` game units
+from that camera. At Natural strength, a distant point's physical image disparity
+approaches the headset IPD, independently of window distance, width and FOV.
+Vertical scale also accounts for panel aspect; Reduced halves disparity and
+Flat disables it. HUD and frontend/pause menus fit the
 panel; mono menus use one quad visible to both eyes.
+
+**VR Window Faces You** turns the anchored panel towards the current head
+position, keeping the centre fixed and avoiding roll. It holds orientation
+during grip dragging so the window does not turn under the grab point; facing
+resumes on release. Disable the option to keep the recentered orientation.
 
 Window gameplay uses two LOCAL-space quad layers with LEFT/RIGHT visibility.
 Room view adds a reconstruction passthrough layer beneath them, following the
