@@ -49,6 +49,14 @@ and position, camera and HUD. Settings are saved.
 If your PlayStation gamepad does not respond, select **Controls → Controller
 Backend → SDL** and restart. [More about settings and camera](docs/PCVR_SETTINGS.md).
 
+In window modes, select **Video → Move window**. The left stick moves it
+left/right and up/down; the right stick moves it closer/farther; **LB/RB** resize
+it. Press **A** to place it or **B** to restore its previous placement.
+In immersive mode, **Video → Adjust camera** keeps the world visible while
+the left stick changes camera height and the right stick changes distance.
+Press **A** to apply or **B** to cancel. Both editors use a small panel below
+the scene and reserve the gamepad controls until you return to settings.
+
 ## Image quality
 
 Start with **Video → VR Render Resolution → HMD 100%**.

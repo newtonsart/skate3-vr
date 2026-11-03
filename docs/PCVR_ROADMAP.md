@@ -42,6 +42,10 @@ Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
   compiled and math-tested on 2026-11-03, headset confirmation pending.
 - [x] Add a double-click Windows launcher with three VR mode buttons and a
   shorter player-focused README; keep build details in the linked guides.
+- [x] Add gamepad window placement/resize and a compact immersive camera editor
+  with live world preview, input capture and apply/cancel controls.
+- [ ] Validate live editor placement, stereo composition and camera preview
+  visually in the headset. See [PCVR_SETTINGS.md](PCVR_SETTINGS.md).
 - [ ] Validate the window and passthrough visually on the headset; Meta settings
   and an active Quest Link session are required. See [PCVR_PASSTHROUGH.md](PCVR_PASSTHROUGH.md).
 - [ ] Profile latency and frame time, target stable refresh.

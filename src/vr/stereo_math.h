@@ -3,7 +3,7 @@
 
 namespace skate3::vr {
 XrPosef RecenterPose(const XrPosef& head);
-XrPosef WindowPose(const XrPosef& reference,float distance,float height);
+XrPosef WindowPose(const XrPosef& reference,float distance,float height,float horizontal=0);
 void MakeWindowEyeCamera(const float game_view_proj[16],const float game_proj[16],
                          const float game_position[3],const XrPosef& reference,
                          const XrView& eye,float scale,float distance,float view_proj[16],

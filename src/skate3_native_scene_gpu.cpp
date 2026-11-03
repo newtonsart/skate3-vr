@@ -7663,6 +7663,8 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
     std::memcpy(camera_scene->view_proj, eye->view_proj, sizeof(camera_scene->view_proj));
     std::memcpy(camera_scene->proj, eye->proj, sizeof(camera_scene->proj));
     std::memcpy(camera_scene->cam_pos, eye->position, sizeof(camera_scene->cam_pos));
+    if (rex::cvar::Query<int32_t>("skate3_vr_edit_mode")!=0)
+      camera_scene->ui_blur=0;
     scene_ptr = eye->render_scene ? eye->render_scene :
         std::shared_ptr<const FrameScene>(&eye_scene, [](const FrameScene*) {});
   }

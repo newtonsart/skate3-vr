@@ -44,11 +44,11 @@ XrPosef RecenterPose(const XrPosef& head) {
   const float yaw=std::atan2(2*(q.w*q.y+q.x*q.z),1-2*(q.y*q.y+q.x*q.x));
   return {{0,std::sin(yaw/2),0,std::cos(yaw/2)},head.position};
 }
-XrPosef WindowPose(const XrPosef& reference,float distance,float height) {
-  if (!std::isfinite(distance) || distance<0.5f || !std::isfinite(height))
+XrPosef WindowPose(const XrPosef& reference,float distance,float height,float horizontal) {
+  if (!std::isfinite(distance) || distance<0.5f || !std::isfinite(height) || !std::isfinite(horizontal))
     throw std::runtime_error("Invalid window position");
   auto pose=reference;
-  const auto offset=Rotate(reference.orientation,{0,height,-distance});
+  const auto offset=Rotate(reference.orientation,{horizontal,height,-distance});
   pose.position.x+=offset.x; pose.position.y+=offset.y; pose.position.z+=offset.z;
   return pose;
 }

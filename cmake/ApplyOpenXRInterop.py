@@ -16,6 +16,32 @@ def apply(sdk):
         path.write_text(text.replace(old, new), encoding="utf-8")
 
     edit("include/rex/ui/overlay/simple_settings_overlay.h",
+         "  bool visible() const { return visible_; }",
+         "  bool visible() const { return visible_; }\n"
+         "  void SetLiveEditor(std::function<bool(ImGuiIO&)> draw) { live_editor_ = std::move(draw); }")
+    edit("include/rex/ui/overlay/simple_settings_overlay.h",
+         "  bool visible_ = false;",
+         "  bool visible_ = false;\n  std::function<bool(ImGuiIO&)> live_editor_;")
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         "void SimpleSettingsDialog::NavigateBack() {",
+         """void SimpleSettingsDialog::NavigateBack() {
+  if (HasCvar("skate3_vr_edit_mode") && rex::cvar::Query<int32_t>("skate3_vr_edit_mode") != 0) {
+    rex::cvar::SetFlagByName("skate3_vr_edit_mode", "0");
+    return;
+  }""")
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         "void SimpleSettingsDialog::OnDraw(ImGuiIO& io) {\n  if (!visible_) {\n    return;\n  }",
+         """void SimpleSettingsDialog::OnDraw(ImGuiIO& io) {
+  if (!visible_) {
+    return;
+  }
+  if (live_editor_ && live_editor_(io)) {
+    // Keep input edges current while the compact editor owns the controls.
+    (void)GatherInput(io);
+    just_shown_ = true;
+    return;
+  }""")
+    edit("include/rex/ui/overlay/simple_settings_overlay.h",
          "  bool renderer_native_ = true;",
          "  bool renderer_native_ = true;\n"
          "  int vr_mode_ = 0;\n"
@@ -68,6 +94,14 @@ def apply(sdk):
           SaveSimpleSettingsConfig(config_path_);
         };
         rows.push_back(std::move(row));
+        RowSpec editor;
+        editor.kind = RowSpec::kAction;
+        editor.label = vr_mode_ == 0 ? "Adjust camera" : "Move window";
+        editor.desc = vr_mode_ == 0
+            ? "Preview the world while adjusting the camera. Left stick: height; right stick: distance. A applies; B cancels."
+            : "Place the window in space. Left stick: move/height; right stick: distance; LB/RB: size. A places; B cancels.";
+        editor.action = [this] { rex::cvar::SetFlagByName("skate3_vr_edit_mode", vr_mode_ == 0 ? "2" : "1"); };
+        rows.push_back(std::move(editor));
         static constexpr std::array<double, 4> vr_scales = {0.0, 0.75, 1.0, 1.25};
         const double scale = rex::cvar::Query<double>("skate3_vr_render_scale");
         vr_resolution_index_ = 0;

@@ -4,6 +4,7 @@
 #include "openxr_passthrough.h"
 #include "presentation.h"
 #include "render_resolution.h"
+#include "editor_controls.h"
 #include <algorithm>
 #include <limits>
 #include <cmath>
@@ -11,6 +12,55 @@
 
 void Check(bool condition) { if(!condition) throw std::runtime_error("Stereo matrix check failed"); }
 int main() {
+  using namespace skate3::vr;
+  Check(EditorAxis(0)==0 && EditorAxis(4000)==0 && EditorAxis(-4000)==0);
+  Check(EditorAxis(32767)==1 && EditorAxis(-32768)==-1);
+  EditorControls editor;
+  EditorValues saved;
+  editor.Begin(EditorMode::Window,saved);
+  EditorInput input;
+  input.apply=true; input.vertical=1;
+  Check(editor.Update(input,1)==EditorResult::Editing && !editor.armed);
+  input={}; editor.Update(input,0.01f);
+  Check(editor.armed);
+  input.horizontal=1; input.vertical=1; input.depth=1; input.resize=1;
+  editor.Update(input,0.05f);
+  Check(editor.current.horizontal>0 && editor.current.height>0 &&
+      editor.current.distance<saved.distance && editor.current.width>saved.width);
+  const auto moved=editor.current;
+  editor.Update(input,std::numeric_limits<float>::quiet_NaN());
+  Check(editor.current.distance==moved.distance);
+  input.cancel=true;
+  Check(editor.Update(input,0.01f)==EditorResult::Cancel);
+  Check(editor.current.horizontal==saved.horizontal && editor.current.height==saved.height &&
+      editor.current.distance==saved.distance && editor.current.width==saved.width);
+  editor.Begin(EditorMode::Window,saved); editor.Update({},0.01f);
+  input={1,1,1,1};
+  for (int i=0;i<1000;++i) editor.Update(input,1);
+  Check(editor.current.horizontal==8 && editor.current.height==2 && editor.current.distance==0.5f && editor.current.width==6);
+  input={-1,-1,-1,-1};
+  for (int i=0;i<1000;++i) editor.Update(input,1);
+  Check(editor.current.horizontal==-8 && editor.current.height==-2 && editor.current.distance==8 && editor.current.width==0.5f);
+  editor.Begin(EditorMode::Camera,saved); editor.Update({},0.01f);
+  input={1,1,1,1}; editor.Update(input,0.05f);
+  Check(editor.current.camera_height>0 && editor.current.camera_distance<0 && editor.current.width==saved.width && editor.current.horizontal==0);
+  input={}; input.apply=true;
+  Check(editor.Update(input,0.01f)==EditorResult::Apply && editor.current.camera_height>0);
+  input={0,1,1,0};
+  for (int i=0;i<1000;++i) editor.Update(input,0.05f);
+  Check(editor.current.camera_height==4 && editor.current.camera_distance==-2);
+  input={0,-1,-1,0};
+  for (int i=0;i<1000;++i) editor.Update(input,0.05f);
+  Check(editor.current.camera_height==-2 && editor.current.camera_distance==8);
+  input={}; input.cancel=true;
+  Check(editor.Update(input,0.01f)==EditorResult::Cancel && editor.current.camera_height==0 && editor.current.camera_distance==0);
+  editor.Begin(EditorMode::Window,saved); editor.Update({},0.01f);
+  input={0,0,1,0}; editor.Update(input,10);
+  Check(std::abs(editor.current.distance-1.95f)<1e-5f);
+  for (auto extent : {RenderExtent{1,1},RenderExtent{1920,1080},RenderExtent{2560,1440},RenderExtent{2272,2464}}) {
+    const auto crop=EditorPanelRegion(extent.width,extent.height);
+    Check(crop.width>0 && crop.height>0 && crop.x+crop.width<=extent.width && crop.y+crop.height<=extent.height);
+  }
   const auto legacy=skate3::vr::EyeRenderExtent(2272,2464,0);
   Check(!legacy.width && !legacy.height);
   const auto native=skate3::vr::EyeRenderExtent(2272,2464,1);
@@ -165,6 +215,12 @@ int main() {
   rotated_reference.orientation={0,0.7071068f,0,0.7071068f};
   const auto rotated_panel=skate3::vr::WindowPose(rotated_reference,2,0);
   Check(std::abs(rotated_panel.position.x+2)<1e-5f && std::abs(rotated_panel.position.z)<1e-5f);
+  const auto moved_panel=skate3::vr::WindowPose(rotated_reference,2,0.3f,1);
+  Check(std::abs(moved_panel.position.x+2)<1e-5f && std::abs(moved_panel.position.z+1)<1e-5f && std::abs(moved_panel.position.y-0.3f)<1e-5f);
+  bool bad_horizontal=false;
+  try { skate3::vr::WindowPose(reference,2,0,std::numeric_limits<float>::infinity()); }
+  catch (const std::runtime_error&) { bad_horizontal=true; }
+  Check(bad_horizontal);
   bool bad_window=false;
   try { skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,0,vp,projection,position); }
   catch (const std::runtime_error&) { bad_window=true; }

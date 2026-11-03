@@ -6,6 +6,7 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #endif
 #include "settings_surface.h"
+#include "editor.h"
 #include <rex/ui/vulkan/presenter.h>
 #include <rex/logging.h>
 #include <rex/cvar.h>
@@ -207,6 +208,7 @@ rex::ui::UIDrawContext* BeginSettingsSurface(rex::ui::UIDrawContext& desktop) {
     if (!width || !height) { surface.painting.unlock(); return nullptr; }
     if (surface.image.width!=width || surface.image.height!=height || surface.format!=original.render_pass_format())
       surface.Create(width,height,original.render_pass_format());
+    surface.image.editor_mode=VrEditorPanelMode();
     Check(vkResetCommandBuffer(surface.command,0),"Reset VR settings commands");
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;

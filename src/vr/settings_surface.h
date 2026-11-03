@@ -8,6 +8,7 @@ struct SettingsImage {
   VkImageView view=VK_NULL_HANDLE;
   uint32_t width=0,height=0;
   bool srgb=false;
+  int editor_mode=0;
 };
 void InitializeSettingsSurface();
 void ShutdownSettingsSurface();

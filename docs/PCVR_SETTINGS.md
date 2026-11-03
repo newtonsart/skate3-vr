@@ -34,6 +34,50 @@ window retain the display's logical aspect. HMD 100% is the first quality settin
 to compare; Desktop restores the original path. See [PCVR_IMAGE_QUALITY.md](PCVR_IMAGE_QUALITY.md)
 for measured dimensions and validation limits.
 
+## Live window and camera editors
+
+The action immediately after **VR View** opens a compact control panel instead
+of the full settings screen. The normal settings dialog remains open underneath
+to keep gameplay input blocked, but only the editor is drawn. The world remains
+stereoscopic. Settings blur is disabled in VR, and the live editor also removes
+the captured pause blur from its per-eye scene copy.
+
+In window modes, select **Move window**:
+
+| Control | Action |
+| --- | --- |
+| Left stick left/right | Move the window horizontally |
+| Left stick up/down | Raise/lower the window |
+| Right stick up/down | Bring the window closer / move it farther away |
+| LB / RB | Reduce / increase width, preserving aspect ratio |
+| A | Place the window and save size/distance/height preferences |
+| B | Cancel and restore the previous placement and size |
+
+The window stays upright and anchored in LOCAL space while you adjust it.
+Horizontal displacement is session-only; no persistent room anchor is created.
+Ctrl+F8 clears that horizontal offset and recenters the window in front of you.
+Movement is limited to ±8 m horizontally, ±2 m vertically, 0.5–8 m distance
+and 0.5–6 m width. Stick deadzones and a clamped time step prevent drift/jumps
+when opening the editor or after a slow frame. Release the opening button and
+sticks before adjusting. Changing VR mode or closing settings cancels an
+unconfirmed edit.
+
+In immersive mode, select **Adjust camera** during gameplay. Left stick up/down
+changes camera height; right stick up/down changes the additional camera
+distance. The existing ranges remain −2–4 m height and −2–8 m distance. A saves,
+B restores the previous values. The compact panel sits below the view so you
+can inspect the skater and surroundings while making changes. A live world
+preview requires a loaded, fresh gameplay scene; it cannot show an unloaded map.
+
+Keyboard alternatives: WASD moves horizontally/vertically, up/down arrows adjust
+distance, minus/plus resize the window, Enter applies, Escape cancels. A gamepad
+can disconnect without confirming an edit; keyboard controls remain available.
+
+The completed UI image carries its editor mode alongside the Vulkan image.
+OpenXR crops that image to the editor's lower strip and places the strip below
+the scene; ordinary settings retain their full panel. This avoids a full black
+rectangle covering the preview and preserves the existing color/queue path.
+
 ## Pause presentation
 
 Start still opens the original game pause menu. **VR Pause View: Menu over 3D
@@ -83,6 +127,27 @@ To exercise the settings surface without a headset, launch with
 This opens settings and writes ignored `out/vr-settings.ppm` once after 30
 completed UI passes. It proves the source UI render/readback, not OpenXR
 composition, controller operation or stereo pause behavior in a headset.
+
+Local live-editor checks on 2026-11-03:
+
+- Windows RelWithDebInfo game, OpenXR probe and stereo/editor-math targets built.
+  Tests cover opening-button suppression, stick deadzones, all placement axes,
+  camera limits, apply/cancel, horizontal anchor rotation and UI crop bounds.
+  Movie-skip and SDK patch/idempotency regressions passed.
+- Separate desktop diagnostic runs with `skate3_vr_settings_test=true` and
+  `skate3_vr_edit_mode=1` / `2` rendered both compact panels. For mode 1, also set
+  `skate3_vr_mode=1`; mode 2 requires immersive mode 0. Actual Vulkan UI readbacks
+  at 1280×720 were visually inspected; text and controls fit the intended crop.
+  This is source-UI verification, not validation of OpenXR cropping or live
+  gamepad operation in the headset.
+- The Khronos validation layer was active. No VUIDs appeared while rendering
+  these panels. Shutdown logged `VUID-vkDestroySemaphore-semaphore-01137` in both
+  editor runs and in a comparison run using the full settings menu with both
+  live editors disabled. The SDK presenter's semaphore teardown remains a
+  separate unresolved issue; this change does not claim to fix it.
+- Quest Link was unavailable (`XR_ERROR_FORM_FACTOR_UNAVAILABLE`, −35).
+  Spatial placement, stereo depth, panel comfort, live camera preview in
+  gameplay and controller reconnection still require headset testing.
 
 Still required: headset checks of both menus, legibility and depth, moving the
 head while paused, adjusting/saving/reopening settings with a controller, and

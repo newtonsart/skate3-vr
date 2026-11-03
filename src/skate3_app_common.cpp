@@ -13,6 +13,7 @@
 #if SKATE3_HAS_OPENXR
 #include "vr/game_vr.h"
 #include "vr/settings_surface.h"
+#include "vr/editor.h"
 #include <rex/graphics/vulkan/graphics_system.h>
 #endif
 
@@ -190,6 +191,13 @@ void SetRestartArgument(std::vector<std::string>& args, std::string name, std::s
 
 constexpr std::string_view kUserDirectoryName = "skate3";
 constexpr std::string_view kSettingsFilename = "settings.toml";
+bool UseSettingsBackdropBlur() {
+#if SKATE3_HAS_OPENXR
+  return !rex::cvar::Query<bool>("skate3_vr") && !rex::cvar::Query<bool>("skate3_vr_settings_test");
+#else
+  return true;
+#endif
+}
 constexpr std::string_view kDlcDirectoryName = "dlc";
 constexpr std::string_view kSavesDirectoryName = "saves";
 constexpr double kSixteenNineAspect = 16.0 / 9.0;
@@ -848,6 +856,7 @@ void Skate3BaseApp::OnPreSetup(rex::RuntimeConfig& config) {
 
 void Skate3BaseApp::OnShutdown() {
 #if SKATE3_HAS_OPENXR
+  skate3::vr::CancelVrEditor();
   if (imgui_drawer()) imgui_drawer()->SetDrawMirror({},{});
   rex::ui::UnregisterBind("bind_skate3_vr_recenter");
   rex::ui::UnregisterBind("bind_skate3_vr_capture");
@@ -878,7 +887,7 @@ void Skate3BaseApp::ToggleSimpleSettings() {
       skate3::vr::SetGameVrSettingsVisible(true);
 #endif
       ApplySettingsCursorMode();
-      skate3::native_scene::SetSettingsMenuBlur(true);
+      skate3::native_scene::SetSettingsMenuBlur(UseSettingsBackdropBlur());
       simple_settings_dialog_->Show();
     }
     return;
@@ -923,6 +932,7 @@ void Skate3BaseApp::ToggleSimpleSettings() {
   // that reliably sees the menu close regardless of who initiated it.
   auto close_settings = [this]() {
 #if SKATE3_HAS_OPENXR
+    skate3::vr::CancelVrEditor();
     skate3::vr::SetGameVrSettingsVisible(false);
 #endif
     skate3::native_scene::SetSettingsMenuBlur(false);
@@ -974,8 +984,15 @@ void Skate3BaseApp::ToggleSimpleSettings() {
           imgui_drawer(), user_settings_path_, std::move(load_profiles), std::move(save_profile),
           std::move(close_settings), std::move(close_game), std::move(restart_game),
           std::move(poll_gamepad));
+#if SKATE3_HAS_OPENXR
+  simple_settings_dialog_->SetLiveEditor([this](ImGuiIO& io) {
+    auto* rt=runtime();
+    auto* input=rt ? static_cast<rex::input::InputSystem*>(rt->input_system()) : nullptr;
+    return skate3::vr::DrawVrEditor(io,input,user_settings_path_);
+  });
+#endif
   ApplySettingsCursorMode();
-  skate3::native_scene::SetSettingsMenuBlur(true);
+  skate3::native_scene::SetSettingsMenuBlur(UseSettingsBackdropBlur());
   simple_settings_dialog_->Show();
 #if SKATE3_HAS_OPENXR
   skate3::vr::SetGameVrSettingsVisible(true);

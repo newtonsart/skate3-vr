@@ -10,6 +10,8 @@
 #include "openxr_session.h"
 #include "openxr_passthrough.h"
 #include "settings_surface.h"
+#include "editor_controls.h"
+#include "editor.h"
 #include "render_resolution.h"
 #include "stereo_math.h"
 #include "cull_frustum.h"
@@ -91,6 +93,7 @@ struct State {
   std::unique_ptr<OpenXrPassthrough> room;
   int last_mode=-1;
   bool settings_presented=false;
+  int settings_editor=0;
   float settings_aspect=16.0f/9;
   double render_scale=-1;
   void UpdateResolution() {
@@ -501,7 +504,9 @@ void ShutdownGameVr() {
   rex::ui::vulkan::SetRuntimeHooks({}); state.reset();
 }
 void RecenterGameVr() {
+  CancelVrEditor();
   std::lock_guard lock(mutex);
+  rex::cvar::SetFlagByName("skate3_vr_window_horizontal","0");
   if(state) { state->recentered=false; state->capture_done=false; }
 }
 void CaptureGameVr() {
@@ -530,6 +535,7 @@ void ToggleGameVrCulling() {
   REXLOG_INFO("VR: main-camera culling expansion {}",enabled?"enabled":"disabled");
 }
 void CycleGameVrMode() {
+  CancelVrEditor();
   const int mode=(REXCVAR_GET(skate3_vr_mode)+1)%3;
   rex::cvar::SetFlagByName("skate3_vr_mode",std::to_string(mode));
 }
@@ -579,6 +585,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     }
     if (REXCVAR_GET(skate3_vr_recenter_requested)) {
       s.recentered=false;
+      rex::cvar::SetFlagByName("skate3_vr_window_horizontal","0");
       rex::cvar::SetFlagByName("skate3_vr_recenter_requested","false");
     }
     if(!s.recentered) { s.reference=RecenterPose(frame.head.pose); s.recentered=true; }
@@ -686,7 +693,8 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       }
       XrCompositionLayerQuad panels[2]={{XR_TYPE_COMPOSITION_LAYER_QUAD},{XR_TYPE_COMPOSITION_LAYER_QUAD}};
       if (window) {
-        const auto pose=WindowPose(s.reference,window_distance,window_height);
+        const auto pose=WindowPose(s.reference,window_distance,window_height,
+            float(rex::cvar::Query<double>("skate3_vr_window_horizontal")));
         for (int eye=0;eye<(world_rendered?2:1);++eye) {
           auto& panel=panels[eye];
           panel.space=s.session->local_space(); panel.pose=pose;
@@ -706,7 +714,10 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
         auto reading=TryReadSettingsSurface(settings);
         if (reading) {
           s.Transfer(context,2,false,&settings);
-          s.settings_presented=true; s.settings_aspect=float(settings.width)/settings.height;
+          s.settings_presented=true; s.settings_editor=settings.editor_mode;
+          const auto crop=settings.editor_mode ? EditorPanelRegion(settings.width,settings.height)
+              : EditorRegion{0,0,settings.width,settings.height};
+          s.settings_aspect=float(crop.width)/crop.height;
         }
         if (s.settings_presented) {
           settings_panel.space=s.session->view_space(); settings_panel.eyeVisibility=XR_EYE_VISIBILITY_BOTH;
@@ -714,6 +725,13 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
           settings_panel.subImage.imageRect.extent={int32_t(s.eyes[2].width),int32_t(s.eyes[2].height)};
           settings_panel.pose.orientation.w=1; settings_panel.pose.position.z=-2;
           settings_panel.size={2.4f,2.4f/s.settings_aspect};
+          if (s.settings_editor) {
+            const auto crop=EditorPanelRegion(s.eyes[2].width,s.eyes[2].height);
+            settings_panel.subImage.imageRect={{int32_t(crop.x),int32_t(crop.y)},
+                {int32_t(crop.width),int32_t(crop.height)}};
+            settings_panel.pose.position={0,-0.65f,-1.7f};
+            settings_panel.size={1.8f,1.8f/s.settings_aspect};
+          }
           layers[layer_count++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&settings_panel);
         }
       }

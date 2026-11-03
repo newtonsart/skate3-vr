@@ -34,6 +34,10 @@ The default window is 2.4 m wide, 2 m away, and level with the recenter position
 Optional command-line settings are `--skate3_vr_window_width=2.4`,
 `--skate3_vr_window_distance=2.0`, and `--skate3_vr_window_height=0.0`.
 These place and resize the complete desktop view; they do not zoom or crop it.
+For direct placement, select **Video → Move window**: left stick moves it
+horizontally/vertically, right stick changes distance, LB/RB resize it, A places
+it and B cancels. A compact panel leaves the scene visible while adjusting.
+The window remains anchored during the session; no saved room anchor is needed.
 The existing **Field of View** setting controls the in-game framing in window
 mode. Immersive camera offsets and the headset's eye FOV do not apply there.
 

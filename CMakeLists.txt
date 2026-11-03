@@ -311,7 +311,7 @@ target_include_directories(skate3 PRIVATE
     ${REXSDK_DIR}/thirdparty/xxHash
 )
 if(SKATE3_ENABLE_OPENXR)
-    target_sources(skate3 PRIVATE src/vr/game_vr.cpp src/vr/stereo_math.cpp src/vr/settings_surface.cpp)
+    target_sources(skate3 PRIVATE src/vr/game_vr.cpp src/vr/stereo_math.cpp src/vr/settings_surface.cpp src/vr/editor.cpp)
     find_program(SKATE3_GLSLANG NAMES glslangValidator
         HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
     add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/include/vr_color_spirv.h"
