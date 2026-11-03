@@ -15,7 +15,7 @@ you need your own Xbox 360 copy of Skate 3.
 
 ## Getting started
 
-1. Run **`Skate3-VR-Setup-0.2.4-alpha.exe`** from a Windows package.
+1. Run **`Skate3-VR-Setup-0.2.5-alpha.exe`** from a Windows package.
    Choose the application folder, game files folder and save profiles folder.
    A desktop shortcut is optional; the Start menu shortcut is also available.
 2. Select your own **Skate 3 Xbox 360 ISO**. Setup extracts it with a progress
@@ -83,9 +83,10 @@ With **Quest Touch**, point at the window until a blue marker appears, hold
 that hand's **grip** and move the controller. The marker turns green; release
 to leave the window anchored. While holding, that hand's stick up/down adjusts
 distance; the other hand's stick up/down changes size. **A** confirms and **B**
-cancels. Both window modes support this interaction. The window turns towards
-your head while its centre stays anchored; its orientation is held while grabbing.
-Use **Video → VR Window Faces You** to disable this, or **VR Window Depth →
+cancels. Both window modes support this interaction. The window faces you only
+while placing it, except while grabbing. After **A**, its position and orientation
+stay fixed in the room. **B** restores both.
+Use **Video → Face Viewer While Placing** to disable automatic orientation, or **VR Window Depth →
 Reduced** for gentler stereo. **Natural** calibrates depth to screen size and game FOV.
 In immersive mode, **Video → Adjust camera** keeps the world visible while
 the left stick changes camera height and the right stick changes distance.
@@ -96,6 +97,8 @@ and object-selection editing. Photos use the original game camera; ordinary
 pause stays over the immersive world. These options can be changed under Video.
 Frontend/loading menus retain their original aspect. **VR Loading Symbol Only**
 removes the loading icon’s black backdrop over the immersive world.
+Game text-entry prompts also appear in the headset. Use your PC keyboard to
+type and **Enter** to accept; the same text remains visible on the desktop.
 
 ## Image quality
 

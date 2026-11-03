@@ -136,10 +136,11 @@ Vertical scale also accounts for panel aspect; Reduced halves disparity and
 Flat disables it. HUD and frontend/pause menus fit the
 panel; mono menus use one quad visible to both eyes.
 
-**VR Window Faces You** turns the anchored panel towards the current head
-position, keeping the centre fixed and avoiding roll. It holds orientation
-during grip dragging so the window does not turn under the grab point; facing
-resumes on release. Disable the option to keep the recentered orientation.
+**Face Viewer While Placing** turns the panel towards the current head position
+only inside Move window, keeping the centre fixed and avoiding roll. It holds
+orientation during grip dragging. **A** anchors position and orientation so it
+no longer follows the head; **B** restores the previous placement. Disable the
+option to keep the recentered orientation during placement.
 
 Window gameplay uses two LOCAL-space quad layers with LEFT/RIGHT visibility.
 Room view adds a reconstruction passthrough layer beneath them, following the

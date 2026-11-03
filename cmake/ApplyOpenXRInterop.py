@@ -225,8 +225,8 @@ def apply(sdk):
           toggle.reset = [this, name, value] { *value = true; rex::cvar::SetFlagByName(name, "true"); SaveSimpleSettingsConfig(config_path_); };
           rows.push_back(std::move(toggle));
         };
-        vr_toggle("VR Window Faces You", "skate3_vr_window_face_viewer", &vr_window_face_viewer_, vr_mode_ != 0,
-                  "Turn the anchored panel towards your head without moving its centre. Orientation is held while gripping the window.");
+        vr_toggle("Face Viewer While Placing", "skate3_vr_window_face_viewer", &vr_window_face_viewer_, vr_mode_ != 0,
+                  "Face your head only inside Move window, except while gripping. A anchors both position and orientation; B restores the previous placement.");
         vr_toggle("VR Editor Comfort View", "skate3_vr_editor_comfort", &vr_editor_comfort_, true,
                   "Use a readable desktop-framed window for photo/object editing. Photo capture uses the original game camera; ordinary pause stays over the stereo world.");
         vr_toggle("VR Loading Symbol Only", "skate3_vr_clear_hud_backdrop", &vr_clear_hud_backdrop_, vr_mode_ == 0,

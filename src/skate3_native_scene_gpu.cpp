@@ -5540,15 +5540,20 @@ bool GrabTargetValid(uint8_t* base) {
 // of the decode path's run-copy untiler: at 32bpp a 4-texel-aligned x-run of
 // 4 maps to contiguous tiled bytes (same proof as the untiler's run_blocks =
 // 16 >> bpb_log2), so one GetTiledOffset2D per 4 texels. 1152x640 = 184k
-// offset computations, well under a millisecond.
+// offset computations. Stage the mapped source first: scalar reads of an
+// uncached Vulkan mapping can stall the render thread for tens of ms.
 bool WriteGrabToGuest(uint8_t* base, const uint8_t* src) {
   constexpr uint32_t kW = RendererState::kBlurWidth;
   constexpr uint32_t kH = RendererState::kBlurHeight;
-  static thread_local std::vector<uint8_t> staging;
+  const auto copy_start = PerfClock::now();
+  static thread_local std::vector<uint8_t> staging, cached_source;
   staging.resize(size_t(kW) * kH * 4);
+  cached_source.resize(size_t(RendererState::kGrabRowPitch) * kH);
+  std::memcpy(cached_source.data(), src, cached_source.size());
+  const auto tile_start = PerfClock::now();
   for (uint32_t y = 0; y < kH; ++y) {
     const uint32_t* row = reinterpret_cast<const uint32_t*>(
-        src + size_t(y) * RendererState::kGrabRowPitch);
+        cached_source.data() + size_t(y) * RendererState::kGrabRowPitch);
     for (uint32_t x = 0; x < kW; x += 4) {
       const uint32_t off = uint32_t(rex::graphics::texture_util::GetTiledOffset2D(
           int32_t(x), int32_t(y), kW, 2));
@@ -5562,7 +5567,14 @@ bool WriteGrabToGuest(uint8_t* base, const uint8_t* src) {
       }
     }
   }
-  return GuestTryCopy(base + kGrabGuestView, staging.data(), staging.size());
+  const auto guest_start = PerfClock::now();
+  const bool wrote = GuestTryCopy(base + kGrabGuestView, staging.data(), staging.size());
+  if (g_r.grab_writes % 120 == 0) {
+    const auto micros = [](auto elapsed) { return std::chrono::duration<double,std::micro>(elapsed).count(); };
+    REXLOG_INFO("native-scene: photo grab CPU us: mapped-copy={:.0f} tile={:.0f} guest-copy={:.0f}",
+        micros(tile_start-copy_start), micros(guest_start-tile_start), micros(PerfClock::now()-guest_start));
+  }
+  return wrote;
 }
 
 // The photo-grab window (see skate3_native_render_scene_photo_readback /

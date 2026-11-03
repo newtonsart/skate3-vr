@@ -702,9 +702,10 @@ std::optional<rex::PathConfig> Skate3BaseApp::OnFinalizePaths(
 void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
 #if SKATE3_HAS_OPENXR
   drawer->SetDrawMirror([this](rex::ui::UIDrawContext& context) -> rex::ui::UIDrawContext* {
-    if (!simple_settings_dialog_ || !simple_settings_dialog_->visible()) return nullptr;
+    const bool system_dialog=rex::kernel::xam::xeXamIsUIActive();
+    if (!system_dialog && (!simple_settings_dialog_ || !simple_settings_dialog_->visible())) return nullptr;
     if (!skate3::vr::GameVrEnabled() && !rex::cvar::Query<bool>("skate3_vr_settings_test")) return nullptr;
-    return skate3::vr::BeginSettingsSurface(context);
+    return skate3::vr::BeginSettingsSurface(context,system_dialog);
   }, [] { skate3::vr::EndSettingsSurface(); });
 #endif
   // Native/emulated corner readout (top right; off by default, cvar
@@ -712,6 +713,7 @@ void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
   // so it never affects cursor or focus handling.
   render_mode_indicator_ = std::make_unique<skate3::RenderModeIndicator>(drawer);
   rex::ui::RegisterBind("bind_skate3_menu", "Escape", "Skate 3 settings", [this] {
+    if (rex::kernel::xam::xeXamIsUIActive()) return;
     // Escape backs out of the settings screen level by level (rows ->
     // category rail -> closed); when the screen is closed it opens it.
     if (simple_settings_dialog_ && simple_settings_dialog_->visible()) {

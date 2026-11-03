@@ -37,7 +37,7 @@ class InteropTests(unittest.TestCase):
             self.assertIn('"skate3_vr_window_feather"};', (sdk / FILES[8]).read_text())
             self.assertIn('edges.label = "VR Window Edges"', (sdk / FILES[8]).read_text())
             self.assertIn('stereo.label = "VR Window Depth"', (sdk / FILES[8]).read_text())
-            self.assertIn('"VR Window Faces You"', (sdk / FILES[8]).read_text())
+            self.assertIn('"Face Viewer While Placing"', (sdk / FILES[8]).read_text())
             self.assertIn('"VR Editor Comfort View"', (sdk / FILES[8]).read_text())
             self.assertIn('recenter.label = "Recenter VR"', (sdk / FILES[8]).read_text())
             self.assertIn('"Adjust camera" : "Move window"', (sdk / FILES[8]).read_text())

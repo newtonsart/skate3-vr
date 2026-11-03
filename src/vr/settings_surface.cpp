@@ -197,7 +197,7 @@ void ShutdownSettingsSurface() {
   std::lock_guard lock(surface.mutex);
   surface.Destroy(); surface.gpu=nullptr; surface.failed=false;
 }
-rex::ui::UIDrawContext* BeginSettingsSurface(rex::ui::UIDrawContext& desktop) {
+rex::ui::UIDrawContext* BeginSettingsSurface(rex::ui::UIDrawContext& desktop,bool system_dialog) {
   surface.painting=std::unique_lock(surface.mutex);
   if (surface.failed) { surface.painting.unlock(); return nullptr; }
   try {
@@ -208,7 +208,8 @@ rex::ui::UIDrawContext* BeginSettingsSurface(rex::ui::UIDrawContext& desktop) {
     if (!width || !height) { surface.painting.unlock(); return nullptr; }
     if (surface.image.width!=width || surface.image.height!=height || surface.format!=original.render_pass_format())
       surface.Create(width,height,original.render_pass_format());
-    surface.image.editor_mode=VrEditorPanelMode();
+    surface.image.system_dialog=system_dialog;
+    surface.image.editor_mode=system_dialog ? 0 : VrEditorPanelMode();
     Check(vkResetCommandBuffer(surface.command,0),"Reset VR settings commands");
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;

@@ -18,6 +18,7 @@ namespace {
 EditorControls editor;
 int editor_view=0;
 std::atomic<int> panel_mode{0};
+std::atomic<uint64_t> placement_revision{0};
 WindowGrab window_grab;
 std::mutex motion_mutex;
 WindowMotionFrame motion_frame;
@@ -55,6 +56,7 @@ void WriteValues(const EditorValues& values) {
 }
 }
 int VrEditorPanelMode() { return panel_mode.load(); }
+uint64_t WindowPlacementRevision() { return placement_revision.load(); }
 void PublishWindowMotion(const WindowMotionFrame& frame) {
   std::lock_guard lock(motion_mutex); motion_frame=frame; motion_time=std::chrono::steady_clock::now();
   if(!frame.controls.connected) window_pointer={};
@@ -127,9 +129,11 @@ bool DrawVrEditor(ImGuiIO& io,rex::input::InputSystem* input,const std::filesyst
   text(190,22,IM_COL32(185,190,195,255),placing ? "Gamepad: left stick move, right stick distance, LB/RB size. Keyboard: WASD / arrows / - +."
       : "Keyboard: WASD / arrows / - +   Enter: Apply   Escape: Cancel");
   if (result!=EditorResult::Editing) {
+    if (placing && result==EditorResult::Apply) ++placement_revision;
     if (result==EditorResult::Apply) rex::ui::SaveSimpleSettingsConfig(settings);
     REXLOG_INFO("VR editor: {}",result==EditorResult::Apply ? "applied" : "cancelled and restored");
     editor.mode=EditorMode::None;
+    panel_mode=0;
     rex::cvar::SetFlagByName("skate3_vr_edit_mode","0");
     window_grab.Reset(); SetWindowPointer({});
   }

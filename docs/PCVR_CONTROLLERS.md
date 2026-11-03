@@ -61,11 +61,12 @@ Bindings follow the [Khronos Oculus Touch interaction profile](https://registry.
 4. While holding, use the **held hand's stick up/down** to bring the window
    closer/farther, and the **other hand's stick up/down** to grow/shrink it.
 5. Release the grip to leave it anchored in space. You can grab it again.
-   **A** confirms the entire edit; **B** restores the position/size from before
+   **A** confirms the entire edit; **B** restores the position, size and orientation from before
    opening Move window.
 
-The panel retains its aspect. With **VR Window Faces You** on, it faces the head
-without moving its centre; gripping holds that orientation until release. Hit
+The panel retains its aspect. With **Face Viewer While Placing** on, it faces the head
+only inside Move window; gripping holds that orientation until release. After
+**A**, position and orientation remain anchored regardless of head movement. Hit
 testing and the grabbed-point offset use the panel's actual rotation, including
 tilt. It is not rotated freely or stretched with two hands. Normal editor limits apply.
 If both controllers point at it, the hand making a fresh grip press wins over

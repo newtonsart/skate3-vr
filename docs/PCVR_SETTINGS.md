@@ -27,6 +27,11 @@ Window controls apply in window modes; camera/HUD controls apply in immersive
 mode. Recenter also has the existing Ctrl+F8 shortcut. World scale affects both
 modes. Ordinary desktop runs do not render the additional settings surface.
 
+Game system dialogs, including text-entry prompts for names, use the same
+headset panel. Type with the PC keyboard and press Enter to accept, or use
+the dialog's existing OK/Cancel buttons. No second input widget or new virtual
+keyboard is created; desktop and headset show the same dialog and text.
+
 **VR Window Edges** offers Sharp (default), Soft and Wide in room-view mode.
 Soft/Wide fade the outer 4%/8% of panel height into active passthrough, with
 equal physical fade widths on all sides. The centre stays opaque; only the
@@ -42,10 +47,12 @@ Reduced halves stereo disparity; Flat renders the original camera in both eyes.
 The head centre remains the stereo reference so walking does not steer the game
 camera. The full desktop framing is retained.
 
-**VR Window Faces You** defaults on. It turns the panel towards the tracked head
-position, including height, without moving its centre or adding roll. Orientation
-is held during a grip drag; facing resumes on release. Off retains the recentered
-orientation. The pointer uses the same actual panel rotation for hit testing.
+**Face Viewer While Placing** defaults on. Inside Move window it turns the panel
+towards the tracked head position, including height, without moving its centre or
+adding roll. Orientation is held during a grip drag. **A** anchors both position
+and orientation; head movement afterwards does not rotate it. **B** restores the
+previous placement and orientation. Off uses the recentered orientation. The
+pointer uses the same actual panel rotation for hit testing.
 
 **VR Editor Comfort View** defaults on. Photo capture/editor/card flows use one
 original-camera render, preserving the game's screenshot and postfx framing.
@@ -112,7 +119,8 @@ Tracking/focus loss releases the grab and requires a fresh grip after recovery.
 See [controller placement and validation](PCVR_CONTROLLERS.md#point-and-grab-the-window).
 
 The window centre stays anchored in LOCAL space while you adjust it; automatic
-facing can rotate it towards the head, and grip dragging holds its current rotation.
+facing can rotate it towards the head only in the placement editor, and grip
+dragging holds its current rotation. Confirmation fixes its orientation too.
 Horizontal displacement is session-only; no persistent room anchor is created.
 Ctrl+F8 clears that horizontal offset and recenters the window in front of you.
 Movement is limited to ±8 m horizontally, ±2 m vertically, 0.5–8 m distance
@@ -165,7 +173,7 @@ dependencies to reuse its pipelines. A separate XR swapchain holds the settings
 panel. The render thread tries to acquire the completed UI image without waiting
 for UI recording; while busy, it retains the last submitted panel. Game and
 window projections, color conversion, Vulkan queue locks and shadow sharing
-remain in use. The additional UI draw/copy happens only while settings are open
+remain in use. The additional UI draw/copy happens only while settings or a game system dialog are open
 in VR (or during the explicit diagnostic below).
 
 Local validation on 2026-11-02:
@@ -238,3 +246,22 @@ handled, and generic modal backdrops use full eye coverage. The user confirmed
 that the loading animation and saving-video overlays both look better in the
 final installed trial. Broader photo-mission/object-editor flows still need
 testing; this does not claim every game menu has been validated.
+
+Further fixes in 0.2.5-alpha:
+
+- Viewer-facing rotation now runs only in Move window. Confirmation anchors
+  the rotation; cancellation restores it with the previous position/size.
+  Math checks cover idle head movement, grip, apply, cancel, disabled facing
+  and recentering.
+- Game system dialogs are mirrored through the existing settings surface,
+  including text-entry prompts. The editor crop is disabled for these dialogs;
+  a stale settings image is not reused as a system dialog. Input and guest
+  completion still use the original dialog. Escape does not open settings
+  over an active system prompt.
+- The reported photo-selection slowdown was a CPU readback cost. Before the
+  fix, native photo tiling/writing averaged 58,412 us per frame in that flow.
+  Copying the mapped source to cached memory before the existing conversion
+  reduced this to 1,248 us across 1,935 writes in the installed trial; stereo
+  submissions returned to approximately 90/s. Target dimensions, pixel format,
+  guarded guest write and shutter-burst handling are unchanged. This timing
+  does not by itself verify the sound or saved-photo content.

@@ -6,6 +6,7 @@
 #include "render_resolution.h"
 #include "editor_controls.h"
 #include "window_blend.h"
+#include "window_facing.h"
 #include "hud_backdrop.h"
 #include <algorithm>
 #include <limits>
@@ -314,6 +315,23 @@ int main() {
   MakeWindowEyeCamera(p,p,camera,reference,eye,1,2.4f,vp,projection,position,0);
   for(int k=0;k<16;++k) Check(std::abs(vp[k]-p[k])<1e-5f);
   const auto fixed=WindowPose(reference,2,0.4f,1);
+  WindowFacing anchor;
+  const auto orientation_equal=[](XrQuaternionf a,XrQuaternionf b) {
+    return std::abs(a.x-b.x)+std::abs(a.y-b.y)+std::abs(a.z-b.z)+std::abs(a.w-b.w)<1e-5f;
+  };
+  const auto placed=anchor.Update(fixed,{0,0,0},true,false,false,0);
+  Check(orientation_equal(placed.orientation,anchor.Update(fixed,{3,2,1},true,false,false,0).orientation));
+  const auto editing=anchor.Update(fixed,{3,2,1},true,true,false,0);
+  Check(!orientation_equal(editing.orientation,placed.orientation));
+  Check(orientation_equal(editing.orientation,anchor.Update(fixed,{-2,-1,0},true,true,true,0).orientation));
+  Check(orientation_equal(placed.orientation,anchor.Update(fixed,{-2,-1,0},true,false,false,0).orientation));
+  const auto applied=anchor.Update(fixed,{3,2,1},true,true,false,0);
+  Check(orientation_equal(applied.orientation,anchor.Update(fixed,{-2,-1,0},true,false,false,1).orientation));
+  Check(orientation_equal(applied.orientation,anchor.Update(fixed,{0,0,0},true,false,false,1).orientation));
+  Check(orientation_equal(fixed.orientation,anchor.Update(fixed,{3,2,1},false,false,false,1).orientation));
+  anchor={};
+  Check(orientation_equal(FaceWindowToHead(fixed,{3,2,1}).orientation,
+      anchor.Update(fixed,{3,2,1},true,false,false,1).orientation));
   for(XrVector3f head : {XrVector3f{0,0,0},XrVector3f{3,2,1},XrVector3f{-2,-1,0}}) {
     const auto facing=FaceWindowToHead(fixed,head);
     Check(facing.position.x==fixed.position.x && facing.position.y==fixed.position.y && facing.position.z==fixed.position.z);

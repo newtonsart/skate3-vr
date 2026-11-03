@@ -9,10 +9,11 @@ struct SettingsImage {
   uint32_t width=0,height=0;
   bool srgb=false;
   int editor_mode=0;
+  bool system_dialog=false;
 };
 void InitializeSettingsSurface();
 void ShutdownSettingsSurface();
-rex::ui::UIDrawContext* BeginSettingsSurface(rex::ui::UIDrawContext& desktop);
+rex::ui::UIDrawContext* BeginSettingsSurface(rex::ui::UIDrawContext& desktop,bool system_dialog=false);
 void EndSettingsSurface();
 // The caller keeps the lock until its GPU copy has completed. Never wait for
 // the UI thread while holding the game's render state or presenter locks.

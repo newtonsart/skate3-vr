@@ -16,6 +16,7 @@
 #include "editor.h"
 #include "render_resolution.h"
 #include "window_blend.h"
+#include "window_facing.h"
 #include "presentation.h"
 #include "stereo_math.h"
 #include "cull_frustum.h"
@@ -26,6 +27,7 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/kernel/guest_presence.h>
+#include <rex/kernel/xam/private.h>
 #include <rex/graphics/vulkan/native_rhi_vulkan.h>
 #include <rex/ui/vulkan/device.h>
 #include <rex/ui/vulkan/instance.h>
@@ -57,7 +59,7 @@ REXCVAR_DEFINE_DOUBLE(skate3_vr_window_width, 2.4, "VR", "Stereo window width in
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_distance, 2.0, "VR", "Stereo window distance in meters").range(0.5,8.0);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_height, 0.0, "VR", "Stereo window height relative to recenter in meters").range(-2.0,2.0);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_feather, 0.0, "VR", "Soft window edge width as a fraction of panel height; passthrough only").range(0.0,0.15);
-REXCVAR_DEFINE_BOOL(skate3_vr_window_face_viewer,true,"VR","Rotate the anchored window towards the viewer; hold orientation while dragging");
+REXCVAR_DEFINE_BOOL(skate3_vr_window_face_viewer,true,"VR","Face the viewer while placing the window; confirmation anchors its orientation");
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_depth,1.0,"VR","Stereo strength for the 3D window; 0 flat, 0.5 reduced, 1 screen-calibrated").range(0.0,1.0);
 REXCVAR_DEFINE_BOOL(skate3_vr_editor_comfort,true,"VR","Use the original photo camera and a readable window for photo/object editing");
 REXCVAR_DEFINE_BOOL(skate3_vr_clear_hud_backdrop,true,"VR","Remove the captured loading fill/spinner group backdrop over the immersive world");
@@ -104,6 +106,7 @@ struct State {
   std::unique_ptr<OpenXrPassthrough> room;
   int last_mode=-1;
   bool settings_presented=false;
+  bool settings_dialog=false;
   int settings_editor=0;
   float settings_aspect=16.0f/9;
   double render_scale=-1;
@@ -136,8 +139,7 @@ struct State {
   EyeSwapchain eyes[3];
   XrPosef reference{};
   bool recentered=false;
-  XrQuaternionf window_rotation{0,0,0,1};
-  bool window_rotation_ready=false;
+  WindowFacing window_facing;
   EditorView last_editor_view=EditorView::Default;
   bool failed=false;
   uint64_t submitted=0;
@@ -610,7 +612,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     if(!s.session) s.Bind(static_cast<rex::ui::vulkan::VulkanDevice*>(vulkan::NativeRhiGetVulkanDevice(input.device)));
     if (mode!=s.last_mode) {
       s.recentered=false;
-      s.window_rotation_ready=false;
+      s.window_facing={};
       s.room->Disable();
       rex::cvar::SetFlagByName("skate3_vr_status",mode==0 ? "Immersive VR" : "Stereo window; black background");
       s.last_mode=mode;
@@ -639,7 +641,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     }
     if (REXCVAR_GET(skate3_vr_recenter_requested)) {
       s.recentered=false;
-      s.window_rotation_ready=false;
+      s.window_facing={};
       rex::cvar::SetFlagByName("skate3_vr_window_horizontal","0");
       rex::cvar::SetFlagByName("skate3_vr_recenter_requested","false");
     }
@@ -661,20 +663,19 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     if (window && !(window_width>=0.5f && window_width<=6 &&
         window_distance>=0.5f && window_distance<=8 && window_height>=-2 && window_height<=2 &&
         aspect>0 && aspect<=10)) throw std::runtime_error("Invalid VR window size/position");
-    const auto pointer=window && VrEditorPanelMode()==1 ? ReadWindowPointer() : WindowPointer{};
+    const bool placing=VrEditorPanelMode()==1;
+    const auto placement_revision=WindowPlacementRevision();
+    const auto pointer=window && placing ? ReadWindowPointer() : WindowPointer{};
     auto panel_pose=WindowPose(comfort ? RecenterPose(frame.head.pose) : s.reference,window_distance,window_height,
         comfort ? 0.f : float(rex::cvar::Query<double>("skate3_vr_window_horizontal")));
     if(comfort) panel_pose=FaceWindowToHead(panel_pose,frame.head.pose.position);
-    else if(window && REXCVAR_GET(skate3_vr_window_face_viewer)) {
-      if(!pointer.holding || !s.window_rotation_ready) {
-        s.window_rotation=FaceWindowToHead(panel_pose,frame.head.pose.position).orientation;
-        s.window_rotation_ready=true;
-      }
-      panel_pose.orientation=s.window_rotation;
-    }
-    PublishVrControls(controls,VrEditorPanelMode()==1);
+    else if(window) panel_pose=s.window_facing.Update(panel_pose,frame.head.pose.position,
+        REXCVAR_GET(skate3_vr_window_face_viewer),placing,pointer.holding,placement_revision);
+    PublishVrControls(controls,placing);
     PublishWindowMotion({controls,hands,s.reference,aspect,panel_pose.orientation});
-    if (!settings_visible.load()) s.settings_presented=false;
+    const bool system_dialog=rex::kernel::xam::xeXamIsUIActive();
+    const bool host_ui=settings_visible.load() || system_dialog;
+    if (!host_ui || system_dialog!=s.settings_dialog) s.settings_presented=false;
     XrCompositionLayerProjectionView projections[2]={{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
     bool rendered=false,world_rendered=false,eye_world[2]{};
     auto context=input;
@@ -786,12 +787,13 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
             : reinterpret_cast<const XrCompositionLayerBaseHeader*>(&menu);
       }
       XrCompositionLayerQuad settings_panel{XR_TYPE_COMPOSITION_LAYER_QUAD};
-      if (settings_visible.load()) {
+      if (host_ui) {
         SettingsImage settings;
         auto reading=TryReadSettingsSurface(settings);
-        if (reading) {
+        if (reading && settings.system_dialog==system_dialog) {
           s.Transfer(context,2,false,&settings);
           s.settings_presented=true; s.settings_editor=settings.editor_mode;
+          s.settings_dialog=system_dialog;
           const auto crop=settings.editor_mode ? EditorPanelRegion(settings.width,settings.height)
               : EditorRegion{0,0,settings.width,settings.height};
           s.settings_aspect=float(crop.width)/crop.height;
