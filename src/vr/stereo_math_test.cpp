@@ -8,6 +8,7 @@
 #include "window_blend.h"
 #include "window_facing.h"
 #include "hud_backdrop.h"
+#include "hud_clip.h"
 #include <algorithm>
 #include <limits>
 #include <cmath>
@@ -17,6 +18,39 @@
 void Check(bool condition) { if(!condition) throw std::runtime_error("Stereo matrix check failed"); }
 int main() {
   using namespace skate3::vr;
+  {
+  const float full_hud[4]={1,1,0,0};
+  auto clip=HudPanelClip(1920,1080,full_hud);
+  Check(clip.left==0 && clip.top==0 && clip.right==1920 && clip.bottom==1080);
+  const float small_hud[4]={0.5f,0.25f,0.125f,-0.125f};
+  clip=HudPanelClip(1920,1080,small_hud);
+  Check(clip.left==600 && clip.top==472 && clip.right==1560 && clip.bottom==742);
+  // A widget parked below the desktop frame stays outside the reduced HUD.
+  const float parked_y=-1.2f*small_hud[1]+small_hud[3];
+  Check((1-parked_y)*540>=clip.bottom);
+  clip=HudPanelClip(1920,1080,full_hud,0.5f);
+  Check(clip.left==480 && clip.right==1440 && clip.top==0 && clip.bottom==1080);
+  const float mirrored_hud[4]={-0.5f,-0.25f,0.125f,-0.125f};
+  auto mirrored_clip=HudPanelClip(1920,1080,mirrored_hud);
+  clip=HudPanelClip(1920,1080,small_hud);
+  Check(clip.left==mirrored_clip.left && clip.right==mirrored_clip.right && clip.top==mirrored_clip.top && clip.bottom==mirrored_clip.bottom);
+  const float outside_hud[4]={0.25f,0.25f,3,3};
+  clip=HudPanelClip(1920,1080,outside_hud);
+  Check(clip.left==clip.right && clip.top==clip.bottom);
+  float invalid_hud[4]={1,1,0,std::numeric_limits<float>::quiet_NaN()};
+  clip=HudPanelClip(1920,1080,invalid_hud); Check(clip.left==clip.right && clip.top==clip.bottom);
+  clip=HudPanelClip(0,1080,full_hud); Check(clip.left==clip.right);
+  for(float offset : {-0.7f,-0.03f,0.03f,0.7f}) {
+    const float eye_hud[4]={0.37f,0.23f,offset,-offset};
+    clip=HudPanelClip(43,31,eye_hud);
+    for(int y=0;y<31;++y) for(int x=0;x<43;++x) {
+      const double nx=(x+0.5)*2/43-1,ny=1-(y+0.5)*2/31;
+      const bool inside=nx>=double(offset)-eye_hud[0] && nx<double(offset)+eye_hud[0] &&
+          ny<=-double(offset)+eye_hud[1] && ny>-double(offset)-eye_hud[1];
+      Check(inside==(x>=clip.left && x<clip.right && y>=clip.top && y<clip.bottom));
+    }
+  }
+  }
   Check(SelectEditorView(true,true,true)==EditorView::Photo);
   Check(SelectEditorView(true,false,true)==EditorView::Objects);
   Check(SelectEditorView(true,false,false)==EditorView::Default);

@@ -8,6 +8,9 @@
 
 #include "generated/skate3_init.h"
 #include <rex/runtime.h>
+#if SKATE3_HAS_OPENXR
+#include "vr/hud_clip.h"
+#endif
 
 #include <array>
 #include <atomic>
@@ -11386,6 +11389,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
           srv_view = t->srv;
         }
         float constants[40];
+        auto draw_scissor=scissor;
         std::memcpy(constants, d.consts, sizeof(d.consts));
         // Wide output: scale the staged projection's clip.x row (the VS
         // computes clip.x = dot(wp, c0)) so the 16:9-authored stream lands
@@ -11416,9 +11420,15 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
           // Screen dim/fade fills belong over the whole view, not inside the readable HUD panel.
           if(eye.override_camera && backdrop && wide_2d_scale!=1.0f)
             for(int k=0;k<4;++k) constants[k]/=wide_2d_scale;
-          if (eye.override_camera && !backdrop) for (int k=0;k<4;++k) {
-            constants[k] = constants[k]*eye.hud_transform[0] + constants[12+k]*eye.hud_transform[2];
-            constants[4+k] = constants[4+k]*eye.hud_transform[1] + constants[12+k]*eye.hud_transform[3];
+          if (eye.override_camera && !backdrop) {
+            for (int k=0;k<4;++k) {
+              constants[k] = constants[k]*eye.hud_transform[0] + constants[12+k]*eye.hud_transform[2];
+              constants[4+k] = constants[4+k]*eye.hud_transform[1] + constants[12+k]*eye.hud_transform[3];
+            }
+            // Shrinking the HUD must not reveal UI parked outside the original screen.
+            const auto clip=skate3::vr::HudPanelClip(context.guest_output_width,context.guest_output_height,
+                eye.hud_transform,wide_2d_scale);
+            draw_scissor={clip.left,clip.top,clip.right,clip.bottom};
           }
         }
 #endif
@@ -11436,6 +11446,8 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
         // edge-to-edge loading quads.
         constants[38] = wide_2d_scale != 1.0f ? wide_2d_scale : 0.0f;
         constants[39] = 0.0f;
+        if(draw_scissor.right<=draw_scissor.left || draw_scissor.bottom<=draw_scissor.top) return;
+        cmd->SetScissor(draw_scissor);
         cmd->SetRootConstants(0, 40, constants, 0);
         cmd->SetTexture(1, srv_view);
         if (yuv != nullptr) {
@@ -11634,6 +11646,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
         emit_draw(d, yuv);
         movie_drawn |= yuv != nullptr;
       }
+      cmd->SetScissor(scissor);
       if (movie_drawn) {
         g_movie_native_last_ns.store(movie_now_ns, std::memory_order_relaxed);
       }

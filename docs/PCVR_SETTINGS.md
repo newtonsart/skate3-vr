@@ -281,3 +281,14 @@ confirmed typing directly without clicking the PC window. Windows controls
 [foreground activation](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow);
 the application does not repeatedly reclaim focus if the user switches away.
 Saved-photo content and broader photo-mission coverage still need more tests.
+
+The user later reported a persistent offscreen “Sign up” prompt in immersive VR.
+The reduced HUD now clips orthographic UI to the original game-frame rectangle
+after applying its scale, per-eye offset and widescreen band. Full-view modal
+backdrops and perspective world markers keep their existing coverage; the
+original scissor is restored before later passes. Pixel-centre checks cover
+fractional per-eye placement, mirrored scales, band width, offscreen/empty
+rectangles and invalid inputs. Actual eye captures include a UI quad at
+original NDC Y −1.514…−1.336, outside the desktop frame. The corrected eye image
+and a full-frame loading-menu capture were inspected. The user confirmed that
+“Sign up” disappeared while the regular HUD remained correct.
