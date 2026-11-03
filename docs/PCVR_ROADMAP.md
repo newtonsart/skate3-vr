@@ -39,6 +39,8 @@ Xbox controller; it does not use hand-motion gestures.
   improvement with HMD rendering over wired Quest Link. See [PCVR_IMAGE_QUALITY.md](PCVR_IMAGE_QUALITY.md).
 - [ ] Complete comfort limits, camera settings and broader immersive-mode tests.
 - [x] Implement optional stereoscopic window and passthrough composition.
+- [x] Add Sharp/Soft/Wide passthrough window edges, verified with GPU readbacks.
+  Visual confirmation over the real room remains pending.
 - [x] Fix the window's cropped/zoomed view by retaining the desktop projection;
   compiled and math-tested on 2026-11-03, headset confirmation pending.
 - [x] Add a double-click Windows launcher with three VR mode buttons and a

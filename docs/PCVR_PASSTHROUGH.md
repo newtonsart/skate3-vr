@@ -76,6 +76,47 @@ Other OpenXR headsets retain immersive VR and the stereo-window path. Room view
 requires the optional `XR_FB_passthrough` extension and reported system support;
 OpenXR alone does not guarantee camera composition on every runtime.
 
+## Soft window edges
+
+In **Video → VR Window Edges**, choose **Sharp**, **Soft** or **Wide**.
+Sharp is the default; Soft and Wide use 4% and 8% of panel height for the fade.
+Both eyes use the same mask in panel coordinates, preserving stereoscopic
+depth and the existing desktop framing. The fade is transparency over the
+runtime's room-view layer, not an image blur or a black vignette. The centre
+remains fully opaque; HUD/text near the outside border fades with the game.
+The independent mod-settings panel stays opaque and legible.
+
+This setting only takes effect with mode 2 and an active passthrough layer.
+Room-view failure retains the full opaque rectangle. Changing back to Sharp,
+the black-background window or immersive mode removes the feathering.
+It does not place the skater on your physical floor or model furniture,
+real-world occlusion, room lighting or shadows.
+
+The existing color compute pass writes premultiplied RGB and alpha before the
+window is submitted with OpenXR's texture-alpha blend flag. The mask uses
+panel aspect, not eye-texture aspect, to keep the physical fade width uniform.
+The pass also works when Ctrl+F9 disables color decoding; all transfer barriers
+follow the compute path in that case. Default color conversion retains its
+existing dispatch; only the edge arithmetic is added. The compositor performs
+the blend; camera pixels are not retrieved or recorded by this application.
+See the [OpenXR alpha contract](https://registry.khronos.org/OpenXR/specs/1.0/man/html/XrCompositionLayerFlagBits.html).
+
+Local checks on 2026-11-03: the game, shader and patched settings menu compiled.
+`skate3-vr-color-test` dispatched the actual shader on the RTX 4080 and checked
+all RGBA pixels across 18 readbacks: decoding on/off, Sharp/Soft/Wide, and square,
+wide and portrait panel aspects. Vulkan validation produced no messages in
+that test. Stereo/window activation and invalid-parameter checks passed, as
+did SDK patch/idempotency tests. To repeat the GPU check without a headset:
+
+```powershell
+cmake --build out/build/relwithdebinfo --target skate3-vr-color-test
+out/build/relwithdebinfo/skate3-vr-color-test.exe
+```
+
+The Meta probe still reported `Passthrough extension enabled: no`. The border's
+appearance over actual camera images, HUD readability and performance in the
+headset remain unverified.
+
 ## Rendering and verification
 
 Gameplay renders the same scene independently for both eyes, preserving the

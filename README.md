@@ -15,7 +15,7 @@ you need your own Xbox 360 copy of Skate 3.
 
 ## Getting started
 
-1. Run **`Skate3-VR-Setup-0.2.1-alpha.exe`** from a Windows package.
+1. Run **`Skate3-VR-Setup-0.2.2-alpha.exe`** from a Windows package.
    Choose the application folder, game files folder and save profiles folder.
    A desktop shortcut is optional; the Start menu shortcut is also available.
 2. Select your own **Skate 3 Xbox 360 ISO**. Setup extracts it with a progress
@@ -106,6 +106,9 @@ In the Meta Link PC app, open **Settings → Developer** (or **Beta**):
 3. Enter Quest Link and relaunch the game with **3D window + passthrough**.
 
 If Meta does not expose passthrough, the window uses a black background.
+For a softer transition into your room, open **Video → VR Window Edges** and
+choose **Soft** or **Wide**. **Sharp** restores the rectangular edge. This only
+applies with active passthrough; the centre stays opaque and stereoscopic.
 **The camera background still needs headset validation in this project.**
 [Passthrough setup and diagnostics](docs/PCVR_PASSTHROUGH.md).
 

@@ -27,6 +27,14 @@ Window controls apply in window modes; camera/HUD controls apply in immersive
 mode. Recenter also has the existing Ctrl+F8 shortcut. World scale affects both
 modes. Ordinary desktop runs do not render the additional settings surface.
 
+**VR Window Edges** offers Sharp (default), Soft and Wide in room-view mode.
+Soft/Wide fade the outer 4%/8% of panel height into active passthrough, with
+equal physical fade widths on all sides. The centre stays opaque; only the
+border becomes transparent. Corner fades combine smoothly. HUD content near
+the edge can also fade; choose Sharp to retain the full border. The setting
+applies immediately and is saved per profile. Without active passthrough,
+the window remains opaque. It does not add room geometry, occlusion or lighting.
+
 **VR Render Resolution** offers Desktop (compatibility), HMD 75%, HMD 100% and
 HMD 125%. The HMD choices size the source render target from OpenXR's recommended
 eye dimensions, independently of the desktop output resolution. The HUD and

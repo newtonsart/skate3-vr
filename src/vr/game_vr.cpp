@@ -15,6 +15,7 @@
 #include "editor_controls.h"
 #include "editor.h"
 #include "render_resolution.h"
+#include "window_blend.h"
 #include "stereo_math.h"
 #include "cull_frustum.h"
 #include "gpu_timing.h"
@@ -54,6 +55,7 @@ REXCVAR_DEFINE_INT32(skate3_vr_mode, 0, "VR", "0: immersive, 1: stereo window, 2
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_width, 2.4, "VR", "Stereo window width in meters").range(0.5,6.0);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_distance, 2.0, "VR", "Stereo window distance in meters").range(0.5,8.0);
 REXCVAR_DEFINE_DOUBLE(skate3_vr_window_height, 0.0, "VR", "Stereo window height relative to recenter in meters").range(-2.0,2.0);
+REXCVAR_DEFINE_DOUBLE(skate3_vr_window_feather, 0.0, "VR", "Soft window edge width as a fraction of panel height; passthrough only").range(0.0,0.15);
 REXCVAR_DEFINE_STRING(skate3_vr_status, "", "VR", "Current room-view availability");
 REXCVAR_DEFINE_BOOL(skate3_vr_capture, false, "VR", "Capture one rendered stereo scene to local out/vr-eye-*.ppm");
 REXCVAR_DEFINE_DOUBLE(skate3_vr_menu_distance, 2.0, "VR", "Menu panel distance in meters");
@@ -254,6 +256,8 @@ struct State {
     sampling.addressModeU=sampling.addressModeV=sampling.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     VkCheck(vkCreateSampler(device,&sampling,nullptr,&sampler),"Create VR color sampler");
     VkPipelineLayoutCreateInfo pipeline_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO}; pipeline_info.setLayoutCount=1; pipeline_info.pSetLayouts=&color_layout;
+    VkPushConstantRange color_parameters{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(ColorParameters)};
+    pipeline_info.pushConstantRangeCount=1; pipeline_info.pPushConstantRanges=&color_parameters;
     VkCheck(vkCreatePipelineLayout(device,&pipeline_info,nullptr,&pipeline_layout),"Create VR color pipeline layout");
     VkShaderModuleCreateInfo shader_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO}; shader_info.codeSize=sizeof(kVrColorSpirv); shader_info.pCode=kVrColorSpirv;
     VkShaderModule shader=VK_NULL_HANDLE; VkCheck(vkCreateShaderModule(device,&shader_info,nullptr,&shader),"Create VR color shader");
@@ -348,7 +352,8 @@ struct State {
     if (++perf_samples==600) REXLOG_INFO("VR: desktop shared-work comparison complete (600 samples)");
     return true;
   }
-  void Transfer(const NativeGuestOutputRenderContext& context,int e,bool capture,const SettingsImage* settings=nullptr) {
+  void Transfer(const NativeGuestOutputRenderContext& context,int e,bool capture,const SettingsImage* settings=nullptr,
+                float feather=0,float aspect=1) {
     auto& eye=eyes[e]; uint32_t index=0;
     const bool profile=timing && e<2;
     XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
@@ -366,6 +371,7 @@ struct State {
       const uint32_t source_width=settings ? settings->width : context.guest_output_width;
       const uint32_t source_height=settings ? settings->height : context.guest_output_height;
       const bool linear=REXCVAR_GET(skate3_vr_linear_color) && !(settings && settings->srgb);
+      const bool compute=linear || feather>0;
       VkCheck(vkResetCommandBuffer(command,0),"Reset XR command buffer");
       VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
       VkCheck(vkBeginCommandBuffer(command,&begin),"Begin XR transfer");
@@ -376,12 +382,12 @@ struct State {
       VkImageMemoryBarrier barriers[2]{};
       for(auto& b:barriers) { b.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER; b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED; b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1}; }
       barriers[0].image=image.image; barriers[0].oldLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-      barriers[0].newLayout=linear?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL; barriers[0].srcAccessMask=VK_ACCESS_MEMORY_WRITE_BIT|VK_ACCESS_MEMORY_READ_BIT; barriers[0].dstAccessMask=linear?VK_ACCESS_SHADER_READ_BIT:VK_ACCESS_TRANSFER_READ_BIT;
+      barriers[0].newLayout=compute?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL; barriers[0].srcAccessMask=VK_ACCESS_MEMORY_WRITE_BIT|VK_ACCESS_MEMORY_READ_BIT; barriers[0].dstAccessMask=compute?VK_ACCESS_SHADER_READ_BIT:VK_ACCESS_TRANSFER_READ_BIT;
       barriers[1].image=eye.images.at(index).image; barriers[1].oldLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
       barriers[1].srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
       barriers[1].newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barriers[1].dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
       vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,0,nullptr,0,nullptr,2,barriers);
-      if(linear) {
+      if(compute) {
       auto color_barrier=barriers[1];
       color_barrier.image=eye.color_image; color_barrier.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED;
       color_barrier.newLayout=VK_IMAGE_LAYOUT_GENERAL;
@@ -394,6 +400,8 @@ struct State {
       vkUpdateDescriptorSets(device,2,writes,0,nullptr);
       vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);
       vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_layout,0,1,&color_set,0,nullptr);
+      const ColorParameters parameters{uint32_t(linear),feather,aspect,0};
+      vkCmdPushConstants(command,pipeline_layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(parameters),&parameters);
       vkCmdDispatch(command,(eye.width+15)/16,(eye.height+15)/16,1);
       color_barrier.oldLayout=VK_IMAGE_LAYOUT_GENERAL; color_barrier.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
       color_barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT; color_barrier.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
@@ -409,7 +417,7 @@ struct State {
         vkCmdBlitImage(command,image.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,eye.images[index].image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,VK_FILTER_LINEAR);
       }
       if(capture) {
-        if(linear) {
+        if(compute) {
         barriers[0].oldLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; barriers[0].newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         barriers[0].srcAccessMask=VK_ACCESS_SHADER_READ_BIT; barriers[0].dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
         vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,barriers);
@@ -420,8 +428,8 @@ struct State {
         host.srcQueueFamilyIndex=host.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED; host.buffer=readback; host.size=VK_WHOLE_SIZE;
         vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,1,&host,0,nullptr);
       }
-      barriers[0].oldLayout=(capture||!linear)?VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; barriers[0].newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-      barriers[0].srcAccessMask=(capture||!linear)?VK_ACCESS_TRANSFER_READ_BIT:VK_ACCESS_SHADER_READ_BIT; barriers[0].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+      barriers[0].oldLayout=(capture||!compute)?VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; barriers[0].newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      barriers[0].srcAccessMask=(capture||!compute)?VK_ACCESS_TRANSFER_READ_BIT:VK_ACCESS_SHADER_READ_BIT; barriers[0].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
       barriers[1].oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barriers[1].newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
       barriers[1].srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT; barriers[1].dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
       vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,0,nullptr,0,nullptr,2,barriers);
@@ -619,6 +627,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     const float window_distance=float(REXCVAR_GET(skate3_vr_window_distance));
     const float window_height=float(REXCVAR_GET(skate3_vr_window_height));
     const float aspect=PanelAspect(input.display_width,input.display_height,input.guest_output_width,input.guest_output_height);
+    const float feather=WindowFeather(mode,s.room->layer()!=XR_NULL_HANDLE,REXCVAR_GET(skate3_vr_window_feather));
     const bool pause_menu=scene && rex::kernel::guest_presence::GameplayContextValue()==0;
     if (window && !(window_width>=0.5f && window_width<=6 &&
         window_distance>=0.5f && window_distance<=8 && window_height>=-2 && window_height<=2 &&
@@ -675,7 +684,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       scene_copy_ms[eye]+=camera.scene_copy_ms;
       if(!rendered) break;
       const auto copy_start=std::chrono::steady_clock::now();
-      s.Transfer(context,eye,capture);
+      s.Transfer(context,eye,capture,nullptr,feather,aspect);
       copy_ms[eye]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-copy_start).count();
       projections[eye].pose=frame.eyes[eye].pose; projections[eye].fov=frame.eyes[eye].fov;
       projections[eye].subImage.swapchain=s.eyes[eye].handle;
@@ -715,6 +724,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
             float(rex::cvar::Query<double>("skate3_vr_window_horizontal")));
         for (int eye=0;eye<(world_rendered?2:1);++eye) {
           auto& panel=panels[eye];
+          if(feather>0) panel.layerFlags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
           panel.space=s.session->local_space(); panel.pose=pose;
           panel.size={window_width,window_width/aspect};
           panel.eyeVisibility=world_rendered ? (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT) : XR_EYE_VISIBILITY_BOTH;

@@ -325,6 +325,9 @@ if(SKATE3_ENABLE_OPENXR)
             "${CMAKE_CURRENT_BINARY_DIR}/include/vr_color_spirv.h"
         DEPENDS src/vr/shaders/color.comp cmake/EmbedSpirv.py VERBATIM)
     target_sources(skate3 PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include/vr_color_spirv.h")
+    add_executable(skate3-vr-color-test EXCLUDE_FROM_ALL src/vr/color_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/include/vr_color_spirv.h")
+    target_include_directories(skate3-vr-color-test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include")
+    target_link_libraries(skate3-vr-color-test PRIVATE skate3_openxr)
     set_source_files_properties(src/vr/game_vr.cpp src/vr/settings_surface.cpp PROPERTIES
         INCLUDE_DIRECTORIES "${REXSDK_DIR}/thirdparty/renderdoc")
     target_link_libraries(skate3 PRIVATE skate3_openxr)

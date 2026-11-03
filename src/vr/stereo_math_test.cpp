@@ -5,6 +5,7 @@
 #include "presentation.h"
 #include "render_resolution.h"
 #include "editor_controls.h"
+#include "window_blend.h"
 #include <algorithm>
 #include <limits>
 #include <cmath>
@@ -13,6 +14,14 @@
 void Check(bool condition) { if(!condition) throw std::runtime_error("Stereo matrix check failed"); }
 int main() {
   using namespace skate3::vr;
+  Check(WindowFeather(0,true,0.08)==0 && WindowFeather(1,true,0.08)==0);
+  Check(WindowFeather(2,false,0.08)==0 && WindowFeather(2,true,0)==0);
+  Check(std::abs(WindowFeather(2,true,0.08)-0.08f)<1e-6f);
+  for(double invalid : {-0.1,0.16,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}) {
+    bool rejected=false;
+    try { WindowFeather(2,true,invalid); } catch(const std::runtime_error&) { rejected=true; }
+    Check(rejected);
+  }
   Check(EditorAxis(0)==0 && EditorAxis(4000)==0 && EditorAxis(-4000)==0);
   Check(EditorAxis(32767)==1 && EditorAxis(-32768)==-1);
   EditorControls editor;

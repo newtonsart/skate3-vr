@@ -66,10 +66,11 @@ def apply(sdk):
          "  float vr_window_width_ = 2.4f, vr_window_distance_ = 2.0f, vr_window_height_ = 0.0f;\n"
          "  float vr_camera_distance_ = 0, vr_camera_height_ = 0, vr_world_scale_ = 1;\n"
          "  float vr_hud_width_ = 1.6f, vr_hud_distance_ = 2.0f;\n"
-         "  bool vr_pause_in_world_ = true;")
+         "  bool vr_pause_in_world_ = true;\n"
+         "  int vr_window_edges_index_ = 0;")
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          "constexpr std::array<std::string_view, 24> kOptionalSimpleSettingsCvars = {",
-         "constexpr std::array<std::string_view, 35> kOptionalSimpleSettingsCvars = {")
+         "constexpr std::array<std::string_view, 36> kOptionalSimpleSettingsCvars = {")
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          '    "user_language"};',
          '    "user_language",\n'
@@ -83,7 +84,8 @@ def apply(sdk):
          '    "skate3_vr_hud_width",\n'
          '    "skate3_vr_hud_distance",\n'
          '    "skate3_vr_pause_in_world",\n'
-         '    "skate3_vr_render_scale"};')
+         '    "skate3_vr_render_scale",\n'
+         '    "skate3_vr_window_feather"};')
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          '    case 0: {  // Video\n      header("Display");',
          '''    case 0: {  // Video
@@ -170,6 +172,28 @@ def apply(sdk):
         vr_slider("VR Window Width", "skate3_vr_window_width", &vr_window_width_, 0.5f, 6.0f, vr_mode_ != 0, window_desc);
         vr_slider("VR Window Distance", "skate3_vr_window_distance", &vr_window_distance_, 0.5f, 8.0f, vr_mode_ != 0, window_desc);
         vr_slider("VR Window Height", "skate3_vr_window_height", &vr_window_height_, -2.0f, 2.0f, vr_mode_ != 0, window_desc);
+        static constexpr std::array<double, 3> edge_widths = {0.0, 0.04, 0.08};
+        const double feather = rex::cvar::Query<double>("skate3_vr_window_feather");
+        vr_window_edges_index_ = 0;
+        for (int i = 1; i < 3; ++i)
+          if (std::abs(edge_widths[i] - feather) < std::abs(edge_widths[vr_window_edges_index_] - feather))
+            vr_window_edges_index_ = i;
+        RowSpec edges;
+        edges.label = "VR Window Edges";
+        edges.desc = "Fade the window edges into the room. The centre stays opaque. Requires active passthrough; the outer HUD may fade too.";
+        edges.options = {"Sharp", "Soft", "Wide"};
+        edges.index = &vr_window_edges_index_; edges.enabled = vr_mode_ == 2;
+        edges.on_enum_change = [this](int value) {
+          vr_window_edges_index_ = value;
+          rex::cvar::SetFlagByName("skate3_vr_window_feather", std::to_string(edge_widths[value]));
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        edges.reset = [this] {
+          vr_window_edges_index_ = 0;
+          rex::cvar::SetFlagByName("skate3_vr_window_feather", "0");
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        rows.push_back(std::move(edges));
         header("VR Camera and HUD");
         vr_pause_in_world_ = rex::cvar::Query<bool>("skate3_vr_pause_in_world");
         RowSpec pause;
