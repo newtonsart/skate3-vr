@@ -263,5 +263,21 @@ Further fixes in 0.2.5-alpha:
   Copying the mapped source to cached memory before the existing conversion
   reduced this to 1,248 us across 1,935 writes in the installed trial; stereo
   submissions returned to approximately 90/s. Target dimensions, pixel format,
-  guarded guest write and shutter-burst handling are unchanged. This timing
-  does not by itself verify the sound or saved-photo content.
+  guarded guest write and shutter-burst handling are unchanged.
+
+The user confirmed that photo selection recovered its fluency and sound, but
+reported a remaining hitch when placing the selected photo on the magazine.
+The first guest-image write still cost 58–70 ms because it triggered individual
+page-watch invalidations. The final trial uses the runtime's existing exact-range
+write notification before the guarded copy. Its first write measured 616 us;
+the full photo flow averaged 977 us across 1,926 writes. An isolated check with
+the real runtime verified a single full-image notification, identical bytes,
+untouched adjacent pages and preservation of the remaining page watches. The
+user then confirmed that the magazine transition's hitch/audio fault was gone.
+
+The user also reported needing a desktop click before typing. Opening a system
+dialog in VR now requests desktop foreground/keyboard focus once. The user
+confirmed typing directly without clicking the PC window. Windows controls
+[foreground activation](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow);
+the application does not repeatedly reclaim focus if the user switches away.
+Saved-photo content and broader photo-mission coverage still need more tests.

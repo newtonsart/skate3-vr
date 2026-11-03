@@ -7,6 +7,7 @@
 #include "skate3_native_scene.h"
 
 #include "generated/skate3_init.h"
+#include <rex/runtime.h>
 
 #include <array>
 #include <atomic>
@@ -5568,6 +5569,12 @@ bool WriteGrabToGuest(uint8_t* base, const uint8_t* src) {
     }
   }
   const auto guest_start = PerfClock::now();
+  if (auto* runtime = rex::Runtime::instance(); runtime && runtime->virtual_membase() == base) {
+    // Invalidate the whole image once rather than faulting on each watched page.
+    runtime->memory()->TriggerPhysicalMemoryCallbacks(
+        rex::thread::global_critical_region::AcquireDirect(), kGrabGuestView,
+        uint32_t(staging.size()), true, true);
+  }
   const bool wrote = GuestTryCopy(base + kGrabGuestView, staging.data(), staging.size());
   if (g_r.grab_writes % 120 == 0) {
     const auto micros = [](auto elapsed) { return std::chrono::duration<double,std::micro>(elapsed).count(); };

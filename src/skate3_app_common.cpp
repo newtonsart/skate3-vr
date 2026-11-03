@@ -701,10 +701,19 @@ std::optional<rex::PathConfig> Skate3BaseApp::OnFinalizePaths(
 
 void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
 #if SKATE3_HAS_OPENXR
-  drawer->SetDrawMirror([this](rex::ui::UIDrawContext& context) -> rex::ui::UIDrawContext* {
+  drawer->SetDrawMirror([this,dialog_was_open=false](rex::ui::UIDrawContext& context) mutable -> rex::ui::UIDrawContext* {
     const bool system_dialog=rex::kernel::xam::xeXamIsUIActive();
+    const bool opening_dialog=system_dialog && !dialog_was_open;
+    dialog_was_open=system_dialog;
     if (!system_dialog && (!simple_settings_dialog_ || !simple_settings_dialog_->visible())) return nullptr;
     if (!skate3::vr::GameVrEnabled() && !rex::cvar::Query<bool>("skate3_vr_settings_test")) return nullptr;
+    if (opening_dialog && window()) {
+#if defined(_WIN32)
+      SetForegroundWindow(static_cast<HWND>(window()->GetNativeWindowHandle()));
+#endif
+      window()->Focus();
+      REXLOG_INFO("VR: game dialog opened; desktop keyboard focus={}",window()->HasFocus());
+    }
     return skate3::vr::BeginSettingsSurface(context,system_dialog);
   }, [] { skate3::vr::EndSettingsSurface(); });
 #endif
