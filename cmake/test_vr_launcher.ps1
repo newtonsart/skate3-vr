@@ -22,10 +22,10 @@ function global:Start-Process {
 }
 try {
     New-Item -ItemType Directory -Path $fixture | Out-Null
-    Assert-LaunchError $fixture 'compilacion VR'
+    Assert-LaunchError $fixture 'VR build not found'
     $build = New-Item -ItemType Directory -Path (Join-Path $fixture 'out\build\relwithdebinfo')
     New-Item -ItemType File -Path (Join-Path $build.FullName 'skate3.exe') | Out-Null
-    Assert-LaunchError $fixture 'juego extraido'
+    Assert-LaunchError $fixture 'Extracted game files not found'
     New-Item -ItemType Directory -Path (Join-Path $fixture 'game') | Out-Null
     New-Item -ItemType File -Path (Join-Path $fixture 'game\default.xex') | Out-Null
 

@@ -6,104 +6,104 @@
 
 # Skate 3 VR
 
-Juega a **Skate 3 en realidad virtual**, con profundidad 3D, seguimiento de
-cabeza y tu mando habitual. Basado en [Skate3Recomp](https://github.com/mchughalex/skate3recomp).
+Play **Skate 3 in virtual reality**, with stereoscopic 3D, head tracking and
+your regular gamepad. Based on [Skate3Recomp](https://github.com/mchughalex/skate3recomp).
 
-**Versión experimental:** probado en Windows con Quest 3 por cable Link.
-Otros visores OpenXR todavía no están comprobados. El juego y sus archivos
-no están incluidos: necesitas tu propia copia de Xbox 360.
+**Experimental build:** tested on Windows with Quest 3 over wired Link.
+Other OpenXR headsets have not been tested yet. Game files are not included:
+you need your own Xbox 360 copy of Skate 3.
 
-## Empezar a jugar
+## Getting started
 
-1. Conecta el visor al PC y entra en **Quest Link**. La aplicación Meta Link
-   debe estar seleccionada como runtime OpenXR activo.
-2. Conecta un **mando Xbox o PlayStation**.
-3. Haz doble clic en **[Jugar-VR.cmd](Jugar-VR.cmd)**, en la carpeta del proyecto.
-4. Elige un modo en la ventana que aparece:
+1. Connect your headset to the PC and start its **PCVR session**. On Quest,
+   enter **Quest Link** and select Meta Link as the active OpenXR runtime.
+2. Connect an **Xbox or PlayStation gamepad**.
+3. Double-click **[Skate3-VR.cmd](Skate3-VR.cmd)** in the project folder.
+4. Choose a mode in the launcher:
 
-| Botón | Qué verás |
+| Button | What you see |
 | --- | --- |
-| **VR inmersiva** | El mundo del juego a tu alrededor; puedes mirar con la cabeza. |
-| **Ventana 3D** | Una pantalla flotante con el encuadre de escritorio y profundidad 3D. |
-| **Ventana 3D + passthrough** | La pantalla 3D sobre la imagen de tu habitación, si Meta Link lo permite. |
+| **Immersive VR** | The game world around you, with independent head tracking. |
+| **3D window** | A floating screen with the desktop framing and stereoscopic depth. |
+| **3D window + passthrough** | The 3D screen over a view of your room, when supported by Meta Link. |
 
-**No necesitas escribir comandos para jugar.** El lanzador usa la compilación
-de `out/build/relwithdebinfo` y el juego extraído en `game/`.
-Si faltan, muestra un aviso: sigue la [guía de preparación y compilación VR](docs/PCVR_BUILD.md#build-the-openxr-game-on-windows).
-Clonar el repositorio no instala ni compila el juego automáticamente.
+**No launch commands needed.** The launcher uses the VR build in
+`out/build/relwithdebinfo` and the extracted game in `game/`.
+If either is missing, it displays an error: follow the [VR setup and build guide](docs/PCVR_BUILD.md#build-the-openxr-game-on-windows).
+Cloning this repository does not automatically install or build the game.
 
-## Controles y ajustes
+## Controls and settings
 
-El juego se controla con el mando original; no utiliza los mandos Touch.
+Gameplay uses the original gamepad controls; Touch controllers are not supported.
 
-| Control | Acción |
+| Input | Action |
 | --- | --- |
-| **Start** | Pausar el juego. |
-| **RB + Start** | Abrir los ajustes del mod, también visibles en el visor. |
-| **F1 / Escape** | Abrir los ajustes con el teclado. |
-| **Ctrl + F8** | Recentrar la vista o colocar la ventana delante de ti. |
-| **Ctrl + F11** | Cambiar entre los tres modos sin cerrar el juego. |
+| **Start** | Pause the game. |
+| **RB + Start** | Open mod settings, also visible in the headset. |
+| **F1 / Escape** | Open settings using the keyboard. |
+| **Ctrl + F8** | Recenter the view or place the window in front of you. |
+| **Ctrl + F11** | Switch between the three modes while playing. |
 
-En **RB + Start → Video** puedes cambiar el modo VR, la calidad de imagen,
-la posición y el tamaño de la ventana, la cámara y el HUD. Los ajustes se guardan.
-Si tu mando PlayStation no responde, selecciona **Controls → Controller Backend
-→ SDL** y reinicia. [Más sobre ajustes y cámara](docs/PCVR_SETTINGS.md).
+Under **RB + Start → Video**, adjust the VR mode, image quality, window size
+and position, camera and HUD. Settings are saved.
+If your PlayStation gamepad does not respond, select **Controls → Controller
+Backend → SDL** and restart. [More about settings and camera](docs/PCVR_SETTINGS.md).
 
-## Mejorar la imagen
+## Image quality
 
-En **Video → VR Render Resolution**, empieza por **HMD 100%**.
+Start with **Video → VR Render Resolution → HMD 100%**.
 
-- **HMD 75%:** reduce la carga gráfica.
-- **HMD 100%:** renderiza a la resolución recomendada por el visor.
-- **HMD 125%:** añade supersampling y cuesta más rendimiento.
-- **Desktop (compatibility):** usa la resolución de escritorio.
+- **HMD 75%:** lower GPU workload.
+- **HMD 100%:** render at the headset's recommended resolution.
+- **HMD 125%:** additional supersampling at a higher GPU cost.
+- **Desktop (compatibility):** use the desktop render resolution.
 
-El lanzador mantiene tus ajustes de calidad y usa MSAA desactivado para seguir
-la configuración VR probada. Las texturas originales no cambian.
-[Detalles de calidad de imagen](docs/PCVR_IMAGE_QUALITY.md).
+The launcher keeps your quality preferences and disables MSAA to match the
+tested VR configuration. Original game textures remain unchanged.
+[Image-quality details](docs/PCVR_IMAGE_QUALITY.md).
 
-## Ver la habitación con passthrough
+## Passthrough: see your room
 
-En Meta Link del PC, abre **Configuración → Developer** (o **Beta**):
+In the Meta Link PC app, open **Settings → Developer** (or **Beta**):
 
-1. Activa **Developer runtime features**.
-2. Activa **Pass-through over Meta Quest/Horizon Link** y acepta el aviso de Meta.
-3. Entra en Quest Link y vuelve a abrir el juego con **Ventana 3D + passthrough**.
+1. Enable **Developer runtime features**.
+2. Enable **Pass-through over Meta Quest/Horizon Link** and accept Meta's notice.
+3. Enter Quest Link and relaunch the game with **3D window + passthrough**.
 
-Si Meta no ofrece esta función, la ventana aparece sobre fondo negro.
-**La imagen de las cámaras sigue pendiente de validación en este proyecto.**
-[Configuración y diagnóstico de passthrough](docs/PCVR_PASSTHROUGH.md).
+If Meta does not expose passthrough, the window uses a black background.
+**The camera background still needs headset validation in this project.**
+[Passthrough setup and diagnostics](docs/PCVR_PASSTHROUGH.md).
 
-## Partidas guardadas
+## Saves and settings
 
-El lanzador conserva la carpeta usada en las pruebas VR: **`out/runtime-test/`**.
-Ahí se guardan tu perfil, partidas y ajustes; no la borres al actualizar.
-Si antes usabas otra carpeta de usuario, el lanzador no migra esas partidas.
-Abrir `skate3.exe` directamente puede usar una carpeta de usuario diferente.
+The launcher uses the existing VR test profile in **`out/runtime-test/`**.
+Your profile, saves and settings are kept there; preserve this folder when updating.
+If you previously used a different user-data folder, the launcher does not migrate
+those saves. Running `skate3.exe` directly may use a different profile folder.
 
-## Si algo falla
+## Troubleshooting
 
-- **No arranca o falta un archivo:** comprueba que existe la compilación VR y
-  que has preparado el juego y su actualización siguiendo la [guía VR](docs/PCVR_BUILD.md).
-- **El visor no muestra el juego:** entra en Quest Link antes de lanzarlo y
-  comprueba el runtime OpenXR activo en Meta Link.
-- **La ventana queda fuera de tu vista:** mira al frente y pulsa **Ctrl + F8**.
-- **El menú de pausa se ve mal:** prueba **Video → VR Pause View → Flat panel**.
+- **Missing build or game files:** prepare the OpenXR-enabled build, game files
+  and title update using the [VR guide](docs/PCVR_BUILD.md).
+- **No game image in the headset:** enter your PCVR session before launching.
+  On Quest, check that Meta Link is the active OpenXR runtime.
+- **The window is out of view:** look forward and press **Ctrl + F8**.
+- **The pause menu looks wrong:** try **Video → VR Pause View → Flat panel**.
 
-La ventana 3D acaba de recibir una corrección de encuadre y necesita otra prueba
-en el visor. También faltan pruebas amplias de mapas, editores y rendimiento;
-no se garantizan 72/90 FPS en todo el juego.
+The 3D window recently received a framing fix and needs another headset check.
+Broader testing of maps, editors and performance is still pending;
+72/90 FPS throughout the game is not guaranteed.
 
-## Desarrollo y créditos
+## Development and credits
 
-El desarrollo VR está en **`main`** de [skate3-vr](https://github.com/newtonsart/skate3-vr).
+VR development is on **`main`** in [skate3-vr](https://github.com/newtonsart/skate3-vr).
 
-- [Compilar y diagnosticar OpenXR](docs/PCVR_BUILD.md)
-- [Rendimiento y mediciones](docs/PCVR_PERFORMANCE.md)
-- [Estado del proyecto y tareas pendientes](docs/PCVR_ROADMAP.md)
-- [Documentación de escritorio, DLC y compilación del proyecto base](docs/DESKTOP.md)
+- [Building and OpenXR diagnostics](docs/PCVR_BUILD.md)
+- [Performance and measurements](docs/PCVR_PERFORMANCE.md)
+- [Project status and remaining work](docs/PCVR_ROADMAP.md)
+- [Base-project desktop, DLC and build documentation](docs/DESKTOP.md)
 
-Créditos a [Skate3Recomp y sus colaboradores](https://github.com/mchughalex/skate3recomp),
-al [SDK ReXGlue](https://github.com/rexglue/rexglue-sdk) y a
-[Xenia](https://github.com/xenia-project/xenia), cuya investigación y herramientas
-han contribuido al ecosistema de recompilación.
+Credit to [Skate3Recomp and its contributors](https://github.com/mchughalex/skate3recomp),
+the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) and
+[Xenia](https://github.com/xenia-project/xenia), whose research and tooling
+have contributed to the recompilation ecosystem.

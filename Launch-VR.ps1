@@ -6,11 +6,11 @@ function Get-VrLaunchOptions {
     $Root = [System.IO.Path]::GetFullPath($Root)
     $executable = Join-Path $Root 'out\build\relwithdebinfo\skate3.exe'
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-        throw "Falta la compilacion VR: $executable`nConsulta docs/PCVR_BUILD.md para prepararla."
+        throw "VR build not found: $executable`nSee docs/PCVR_BUILD.md for setup instructions."
     }
     $game = Join-Path $Root 'game'
     if (-not (Test-Path -LiteralPath (Join-Path $game 'default.xex') -PathType Leaf)) {
-        throw "Falta el juego extraido en: $game`nConsulta docs/PCVR_BUILD.md."
+        throw "Extracted game files not found in: $game`nSee docs/PCVR_BUILD.md."
     }
     # Preserve the profile used by the documented VR command, including existing saves.
     $userData = Join-Path $Root 'out\runtime-test'
@@ -55,13 +55,13 @@ function New-VrLauncherForm {
     $form.Controls.Add($layout)
 
     $instructions = New-Object System.Windows.Forms.Label
-    $instructions.Text = "Conecta el visor, entra en Quest Link y conecta tu mando.`nElige como quieres jugar:"
+    $instructions.Text = "Connect your headset and start PCVR (Quest Link on Meta).`nConnect your gamepad, then choose a mode:"
     $instructions.AutoSize = $true
     $instructions.MaximumSize = New-Object System.Drawing.Size(430, 0)
     $instructions.Margin = New-Object System.Windows.Forms.Padding(3, 3, 3, 12)
     $layout.Controls.Add($instructions)
 
-    $modes = @('VR inmersiva', 'Ventana 3D', 'Ventana 3D + passthrough')
+    $modes = @('Immersive VR', '3D window', '3D window + passthrough')
     for ($mode = 0; $mode -lt $modes.Count; $mode++) {
         $button = New-Object System.Windows.Forms.Button
         $button.Text = $modes[$mode]
@@ -76,14 +76,14 @@ function New-VrLauncherForm {
                 $window.Close()
             } catch {
                 [System.Windows.Forms.MessageBox]::Show($window, $_.Exception.Message,
-                    'No se puede iniciar Skate 3 VR', 'OK', 'Error') | Out-Null
+                    'Unable to start Skate 3 VR', 'OK', 'Error') | Out-Null
             }
         })
         $layout.Controls.Add($button)
     }
 
     $notes = New-Object System.Windows.Forms.Label
-    $notes.Text = "Ajustes de calidad y camara: RB + Start > Video.`nPassthrough requiere activarlo antes en la app Meta Link."
+    $notes.Text = "Quality and camera settings: RB + Start > Video.`nPassthrough must be enabled in Meta Link first."
     $notes.AutoSize = $true
     $notes.MaximumSize = New-Object System.Drawing.Size(430, 0)
     $notes.Margin = New-Object System.Windows.Forms.Padding(3, 12, 3, 3)

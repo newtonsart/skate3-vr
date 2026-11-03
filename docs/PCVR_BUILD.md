@@ -70,7 +70,7 @@ settings, pause, window and image-quality work is included on `main`.
 
 ## Launch without a terminal
 
-After building, double-click **[Jugar-VR.cmd](../Jugar-VR.cmd)** at the repository
+After building, double-click **[Skate3-VR.cmd](../Skate3-VR.cmd)** at the repository
 root. Its Windows PowerShell/Windows Forms window offers immersive VR, stereo
 window and stereo window with passthrough. No additional launcher dependency or
 administrator permission is required. Activate Quest Link before choosing a mode.

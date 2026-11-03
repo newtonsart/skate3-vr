@@ -18,7 +18,7 @@ Upstream native-rendering showcase (desktop, not a VR demonstration):
 
 ## How Do I Play?
 
-For VR, use the [quick start in the README](../README.md#empezar-a-jugar). These OS installation steps describe
+For VR, use the [quick start in the README](../README.md#getting-started). These OS installation steps describe
 the base desktop application and require an appropriate build/package.
 
 Notes:
