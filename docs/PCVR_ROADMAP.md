@@ -40,6 +40,8 @@ Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
 - [x] Implement optional stereoscopic window and passthrough composition.
 - [x] Fix the window's cropped/zoomed view by retaining the desktop projection;
   compiled and math-tested on 2026-11-03, headset confirmation pending.
+- [x] Add a double-click Windows launcher with three VR mode buttons and a
+  shorter player-focused README; keep build details in the linked guides.
 - [ ] Validate the window and passthrough visually on the headset; Meta settings
   and an active Quest Link session are required. See [PCVR_PASSTHROUGH.md](PCVR_PASSTHROUGH.md).
 - [ ] Profile latency and frame time, target stable refresh.
@@ -57,7 +59,8 @@ https://github.com/mchughalex/rexglue-skate3/pull/18.
   `data/webkit/EAWebkit.xex`. Their presence and compatibility inside this GOD
   package have not yet been verified. TU3 is recommended for code generation;
   the resulting TU3 build also requires its patches at runtime. See the build
-  instructions in the README for the exact package name and configuration.
+  [base build instructions](DESKTOP.md#building-from-source) for the exact
+  package name and configuration.
 - The pinned ReXGlue commit is `d8ddb9f`; the ImGui submodule is checked out at
   `7038887`. Compilation has not yet verified the fix.
 - The existing checkout has staged deletions in the nested `o1heap` submodule,

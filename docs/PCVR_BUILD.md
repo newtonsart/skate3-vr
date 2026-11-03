@@ -22,7 +22,8 @@ python cmake/test_extract_game_iso.py
 
 This supports the XDVDFS partitions recognized by the game's own ISO installer.
 It does not read GOD ZIPs. Supply TU3 using `SKATE3_TITLE_UPDATE_PACKAGE` as
-described in the main README. Keep all retail data and update packages local.
+described in [the base build guide](DESKTOP.md#building-from-source).
+Keep all retail data and update packages local.
 
 ## Build the OpenXR game on Windows
 
@@ -61,10 +62,30 @@ Reconfiguration after code generation is required. Keep passing `vrArgs` when
 using the configure preset: its default `REXSDK_DIR` points at the original
 submodule, which the VR patch intentionally refuses. For an already configured
 build, `cmake --build --preset relwithdebinfo --target skate3 --parallel 8` uses
-the cached SDK path. The main README's generic desktop preset does not enable VR.
+the cached SDK path. The [base desktop guide](DESKTOP.md#building-from-source)
+does not enable VR.
 
 The original `vr-v0.1.0-alpha` tag remains a historical checkpoint. Current
 settings, pause, window and image-quality work is included on `main`.
+
+## Launch without a terminal
+
+After building, double-click **[Jugar-VR.cmd](../Jugar-VR.cmd)** at the repository
+root. Its Windows PowerShell/Windows Forms window offers immersive VR, stereo
+window and stereo window with passthrough. No additional launcher dependency or
+administrator permission is required. Activate Quest Link before choosing a mode.
+
+The launcher uses `out/build/relwithdebinfo/skate3.exe`, `game/` and the existing
+`out/runtime-test/` user profile. It does not build, extract game files or migrate
+saves. It selects Vulkan, MSAA 1 and shared frame work as in the tested launch
+command; render resolution and camera preferences come from the saved settings.
+Errors for a missing executable or game data appear in a dialog.
+
+The small launcher check runs without starting the game or connecting a headset:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File cmake/test_vr_launcher.ps1
+```
 
 ## OpenXR runtime probe
 
