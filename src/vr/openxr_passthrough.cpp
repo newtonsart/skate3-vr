@@ -30,7 +30,7 @@ bool OpenXrPassthrough::Enable() {
   attempted_=true;
   if (!context_.passthrough_supported()) {
     error_=context_.runtime()=="Oculus"
-        ? "Room view is unavailable. Enable Developer Runtime Features and Passthrough over Meta Quest Link in Settings > Beta, then restart the game."
+        ? "Meta Link room view is unavailable. In Settings > Developer (Beta in older versions), enable Developer runtime features and Pass-through over Meta Quest/Horizon Link, accept Meta's notice, then restart the game."
         : "This headset or OpenXR runtime does not provide room view. The stereo window remains available.";
     return false;
   }

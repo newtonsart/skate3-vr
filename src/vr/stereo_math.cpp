@@ -54,16 +54,14 @@ XrPosef WindowPose(const XrPosef& reference,float distance,float height) {
 }
 void MakeWindowEyeCamera(const float* vp,const float* proj,const float* camera,
                          const XrPosef& reference,const XrView& eye,float scale,
-                         float width,float aspect,float distance,float height,
+                         float distance,
                          float* output,float* projection,float* position) {
-  if (!std::isfinite(scale) || scale<=0 || !std::isfinite(width) || width<=0 ||
-      !std::isfinite(aspect) || aspect<=0 || !std::isfinite(distance) || distance<0.5f ||
-      !std::isfinite(height)) throw std::runtime_error("Invalid stereo window");
+  if (!std::isfinite(scale) || scale<=0 || !std::isfinite(distance) || distance<0.5f)
+    throw std::runtime_error("Invalid stereo window");
   float inverse[16],game_view[16]; Invert(proj,inverse); Multiply(vp,inverse,game_view);
   const auto& q=reference.orientation;
   auto offset=Rotate({-q.x,-q.y,-q.z,q.w},{eye.pose.position.x-reference.position.x,
       eye.pose.position.y-reference.position.y,eye.pose.position.z-reference.position.z});
-  offset.y-=height;
   if (!std::isfinite(offset.x) || !std::isfinite(offset.y) || !std::isfinite(offset.z))
     throw std::runtime_error("Invalid stereo window eye pose");
   // Preserve the game's full camera orientation. Head rotation changes how
@@ -82,13 +80,12 @@ void MakeWindowEyeCamera(const float* vp,const float* proj,const float* camera,
     view[12+a]=-(position[0]*axes[a][0]+position[1]*axes[a][1]+position[2]*axes[a][2]);
   }
   const float depth=std::max(0.1f,distance+offset.z);
-  const float panel_height=width/aspect;
-  std::fill(projection,projection+16,0.0f);
-  projection[0]=2*depth/width; projection[5]=2*depth/panel_height;
-  projection[8]=-2*offset.x/width; projection[9]=-2*offset.y/panel_height;
-  const float near_z=0.05f*scale,far_z=10000*scale;
-  projection[10]=-far_z/(far_z-near_z); projection[11]=-1;
-  projection[14]=-far_z*near_z/(far_z-near_z);
+  // Fit the desktop view inside the panel; its physical size must not crop the game FOV.
+  for (int r=0;r<4;++r) for (int c=0;c<4;++c)
+    projection[r*4+c]=proj[r*4+c]*((r==0 || r==2) ? -1.0f : 1.0f);
+  projection[0]*=depth/distance; projection[5]*=depth/distance;
+  projection[8]-=projection[0]*offset.x/depth;
+  projection[9]-=projection[5]*offset.y/depth;
   Multiply(view,projection,output);
 }
 void MakeHudTransform(const XrPosef& head,const XrView& eye,const float* projection,

@@ -4,6 +4,7 @@
 #include "openxr_passthrough.h"
 #include "presentation.h"
 #include "render_resolution.h"
+#include <algorithm>
 #include <limits>
 #include <cmath>
 #include <stdexcept>
@@ -133,11 +134,11 @@ int main() {
   eye.pose.orientation={0,0,0,1}; eye.pose.position={0,0,0};
   for (int e=0;e<2;++e) {
     eye.pose.position.x=e ? 0.032f : -0.032f;
-    skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2.4f,16.0f/9,2,0,
+    skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2,
         window_vp[e],window_p[e],window_pos[e]);
     const float* m=window_vp[e];
     Check(std::abs((2*m[8]+m[12])/(2*m[11]+m[15]))<1e-5f);
-    Check(std::abs((1.2f*window_p[e][0])/2-1)<1e-5f);
+    Check(window_p[e][0]==-p[0] && window_p[e][5]==p[5]);
     // Original scene camera/projection remain untouched.
     Check(p[0]==-1 && camera[0]==0);
   }
@@ -149,12 +150,12 @@ int main() {
   Check(disparity(1)>0 && disparity(4)<0);
   const float previous=window_vp[1][0];
   eye.pose.orientation={0,0.7071068f,0,0.7071068f};
-  skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2.4f,16.0f/9,2,0,
+  skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2,
       vp,projection,position);
   Check(std::abs(vp[0]-previous)<1e-5f);
   // Head translation cancels in projection at the fixed window plane.
   eye.pose.position={0.3f,0.2f,0.4f};
-  skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2.4f,16.0f/9,2,0,
+  skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,2,
       vp,projection,position);
   Check(std::abs((2*vp[8]+vp[12])/(2*vp[11]+vp[15]))<1e-5f);
   Check(std::abs((2*vp[9]+vp[13])/(2*vp[11]+vp[15]))<1e-5f);
@@ -165,7 +166,7 @@ int main() {
   const auto rotated_panel=skate3::vr::WindowPose(rotated_reference,2,0);
   Check(std::abs(rotated_panel.position.x+2)<1e-5f && std::abs(rotated_panel.position.z)<1e-5f);
   bool bad_window=false;
-  try { skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,0,1,2,0,vp,projection,position); }
+  try { skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,0,vp,projection,position); }
   catch (const std::runtime_error&) { bad_window=true; }
   Check(bad_window);
   // A pitched game camera and nonzero world position still converge at the
@@ -182,12 +183,35 @@ int main() {
   rotated_reference.position={3,4,5};
   eye.pose.position={3.4f,4.2f,4.7f};
   skate3::vr::MakeWindowEyeCamera(pitched_vp,p,origin,rotated_reference,eye,1,
-      2.4f,16.0f/9,2,0.1f,vp,projection,position);
+      2,vp,projection,position);
   const auto clip=[&](int c) { return center[0]*vp[c]+center[1]*vp[4+c]+center[2]*vp[8+c]+vp[12+c]; };
   Check(clip(3)>0 && std::abs(clip(0)/clip(3))<1e-4f && std::abs(clip(1)/clip(3))<1e-4f);
+  // With the head centered, the entire desktop frustum (including its edges,
+  // lens shift and clipping) must survive every window distance and world scale.
+  eye.pose.position=rotated_reference.position;
+  for (float fov : {45.f,60.f,90.f,110.f}) {
+    float desktop_p[16];
+    std::copy(p,p+16,desktop_p);
+    desktop_p[5]=1/std::tan(fov*3.14159265f/360);
+    desktop_p[0]=-desktop_p[5]/(16.f/9);
+    desktop_p[8]=0.12f; desktop_p[9]=-0.07f;
+    float desktop_vp[16]{};
+    for (int r=0;r<4;++r) for (int c=0;c<4;++c) for (int k=0;k<4;++k)
+      desktop_vp[r*4+c]+=view[r*4+k]*desktop_p[k*4+c];
+    for (float distance : {0.5f,2.f,8.f}) for (float scale : {0.5f,1.f,2.f}) {
+      skate3::vr::MakeWindowEyeCamera(desktop_vp,desktop_p,origin,rotated_reference,eye,
+          scale,distance,vp,projection,position);
+      for (int i=0;i<16;++i) Check(std::abs(vp[i]-desktop_vp[i])<1e-4f);
+      for (int i=0;i<3;++i) Check(std::abs(position[i]-origin[i])<1e-5f);
+    }
+  }
   for (float invalid : {0.f,-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
     bool rejected_window=false;
-    try { skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,invalid,2.4f,1,2,0,vp,projection,position); }
+    try { skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,invalid,2,vp,projection,position); }
+    catch (const std::runtime_error&) { rejected_window=true; }
+    Check(rejected_window);
+    rejected_window=false;
+    try { skate3::vr::MakeWindowEyeCamera(p,p,camera,reference,eye,1,invalid,vp,projection,position); }
     catch (const std::runtime_error&) { rejected_window=true; }
     Check(rejected_window);
   }

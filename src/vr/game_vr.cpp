@@ -625,7 +625,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       if(scene && !scene->items.empty() && scene->proj[0]!=0) {
         if (window) {
           MakeWindowEyeCamera(scene->view_proj,scene->proj,scene->cam_pos,s.reference,frame.eyes[eye],
-              float(REXCVAR_GET(skate3_vr_world_scale)),window_width,aspect,window_distance,window_height,
+              float(REXCVAR_GET(skate3_vr_world_scale)),window_distance,
               camera.view_proj,camera.proj,camera.position);
         } else {
           MakeEyeCamera(scene->view_proj,scene->proj,scene->cam_pos,s.reference,frame.eyes[eye],float(REXCVAR_GET(skate3_vr_world_scale)),camera.view_proj,camera.proj,camera.position,

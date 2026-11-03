@@ -19,10 +19,15 @@ int main(int argc, char** argv) {
     context.Initialize();
     std::printf("Runtime: %s\n", context.runtime().c_str());
     std::printf("Passthrough extension enabled: %s\n",context.passthrough_extension_enabled()?"yes":"no");
+    if (passthrough && !context.passthrough_extension_enabled()) {
+      skate3::vr::OpenXrPassthrough room(context,XR_NULL_HANDLE);
+      room.Enable();
+      throw std::runtime_error(room.error());
+    }
     context.DetectHeadset();
     std::printf("Passthrough system support: %s\n",context.passthrough_supported()?"yes":"no");
     if (passthrough && !context.passthrough_supported())
-      throw std::runtime_error("Enable Developer Runtime Features and Passthrough over Meta Quest Link in the Meta PC app (Settings > Beta), then retry");
+      throw std::runtime_error("The runtime exposes XR_FB_passthrough, but this headset reports no passthrough support");
     std::printf("HMD: %s\n", context.headset().c_str());
     for (size_t eye = 0; eye < context.views().size(); ++eye) {
       const auto& view = context.views()[eye];

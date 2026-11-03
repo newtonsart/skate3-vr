@@ -102,8 +102,12 @@ width/distance/height, camera offsets, world scale, HUD width/distance,
 **VR Pause View** and **Recenter VR**. Choose **VR Pause View → Flat panel** to
 restore the earlier pause presentation. See [settings and pause](docs/PCVR_SETTINGS.md).
 
-For room view on Meta's PC runtime, enable **Developer Runtime Features** and
-**Passthrough over Meta Quest Link** under Settings → Beta, accept Meta's notice,
+The stereo window retains the desktop camera, field of view and framing, adding
+binocular depth. Window width and height move/resize the complete picture.
+
+For room view on Meta's PC runtime, enable **Developer runtime features** and
+**Pass-through over Meta Quest/Horizon Link** under Settings → Developer (Beta
+in older versions), accept Meta's notice,
 then restart the game. If support or permission is unavailable, the stereo
 window uses a black background. See [passthrough setup and test limits](docs/PCVR_PASSTHROUGH.md).
 
@@ -243,7 +247,7 @@ requires Clang, so MSVC and Apple Clang are not supported. On Windows, install
 Clone with submodules:
 
 ```sh
-git clone --recursive --branch main https://github.com/newtonsart/skate3recomp-vr.git skate3recomp
+git clone --recursive --branch main https://github.com/newtonsart/skate3-vr.git skate3recomp
 cd skate3recomp
 ```
 
