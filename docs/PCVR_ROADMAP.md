@@ -14,7 +14,7 @@ Subsequent performance improvements and measurements: [PCVR_PERFORMANCE.md](PCVR
 
 ## Target
 Meta Quest 3 connected to a Windows PC (RTX 4080); standard Xbox/PlayStation
-controller for all gameplay, head tracking from the headset via OpenXR.
+controller or Quest Touch mapped to Xbox inputs, head tracking via OpenXR.
 
 ## VR modes
 - **Immersive VR**: a stereoscopic, full-scale 3D world around the viewer,
@@ -24,7 +24,8 @@ controller for all gameplay, head tracking from the headset via OpenXR.
   orientation and FOV. Panel resizing retains the complete desktop framing.
   Optional room view uses runtime-provided passthrough.
 
-Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
+Both modes share one OpenXR/Vulkan core. Touch input emulates a conventional
+Xbox controller; it does not use hand-motion gestures.
 
 ## Milestones
 - [x] Windows build and Vulkan gameplay using local game assets.
@@ -47,6 +48,10 @@ Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
 - [x] Add a Windows installer with selectable game/save paths, optional
   shortcuts, setup without a headset and separate save profiles in the launcher.
   Build and test notes: [PCVR_DISTRIBUTION.md](PCVR_DISTRIBUTION.md).
+- [x] Map Quest Touch buttons, sticks, triggers and grips to player 1, including
+  pause, D-pad and mod settings. Automated action/mapping/input tests pass.
+- [ ] Confirm Touch gameplay, flick tricks, menu chords and controller
+  reconnection in the headset. See [PCVR_CONTROLLERS.md](PCVR_CONTROLLERS.md).
 - [ ] Validate live editor placement, stereo composition and camera preview
   visually in the headset. See [PCVR_SETTINGS.md](PCVR_SETTINGS.md).
 - [ ] Validate the window and passthrough visually on the headset; Meta settings

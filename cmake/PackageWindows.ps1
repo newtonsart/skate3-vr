@@ -1,7 +1,7 @@
 param(
     [string]$BuildDirectory = (Join-Path $PSScriptRoot '..\out\build\relwithdebinfo'),
     [string]$Compiler = (Join-Path $PSScriptRoot '..\out\tools\InnoSetup\ISCC.exe'),
-    [string]$Version = '0.2.0-alpha'
+    [string]$Version = '0.2.1-alpha'
 )
 $ErrorActionPreference = 'Stop'
 Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop

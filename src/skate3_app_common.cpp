@@ -14,6 +14,7 @@
 #include "vr/game_vr.h"
 #include "vr/settings_surface.h"
 #include "vr/editor.h"
+#include "vr/controller_driver.h"
 #include <rex/graphics/vulkan/graphics_system.h>
 #endif
 
@@ -791,6 +792,9 @@ void Skate3BaseApp::OnPostSetup() {
   ApplyGameplayCursorMode();
 
   if (auto* input_system = static_cast<rex::input::InputSystem*>(runtime()->input_system())) {
+#if SKATE3_HAS_OPENXR
+    if (rex::cvar::Query<bool>("skate3_vr")) input_system->AddDriver(skate3::vr::CreateVrControllerDriver());
+#endif
     input_system->SetActiveCallback([this]() {
       const bool settings_visible = simple_settings_dialog_ && simple_settings_dialog_->visible();
       const bool xam_ui_active = rex::kernel::xam::xeXamIsUIActive();

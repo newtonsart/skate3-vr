@@ -8,6 +8,8 @@
 #include "game_vr.h"
 #include "openxr_context.h"
 #include "openxr_session.h"
+#include "openxr_gamepad.h"
+#include "controller_driver.h"
 #include "openxr_passthrough.h"
 #include "settings_surface.h"
 #include "editor_controls.h"
@@ -90,6 +92,7 @@ struct EyeSwapchain {
 struct State {
   OpenXrContext xr;
   std::unique_ptr<OpenXrSession> session;
+  std::unique_ptr<OpenXrGamepad> controllers;
   std::unique_ptr<OpenXrPassthrough> room;
   int last_mode=-1;
   bool settings_presented=false;
@@ -153,6 +156,8 @@ struct State {
       if(pool) vkDestroyCommandPool(device,pool,nullptr);
       if(readback) vkDestroyBuffer(device,readback,nullptr);
       if(readback_memory) vkFreeMemory(device,readback_memory,nullptr);
+      PublishVrControls({});
+      controllers.reset();
       room.reset();
       session.reset();
     }
@@ -162,6 +167,10 @@ struct State {
     session=std::make_unique<OpenXrSession>(xr);
     auto& queue=*gpu->queue_families()[gpu->queue_family_graphics_compute()].queues[0];
     session->Bind(gpu->vulkan_instance()->instance(),gpu->physical_device(),device,gpu->queue_family_graphics_compute(),&queue.mutex);
+    try {
+      controllers=std::make_unique<OpenXrGamepad>(xr.instance(),session->handle());
+      REXLOG_INFO("VR: Touch controllers enabled as Xbox player 1 (Menu=Start, Menu+X=Back, left click+tilt=D-pad)");
+    } catch(const std::exception& error) { REXLOG_WARN("VR: controller input unavailable: {}",error.what()); }
     room=std::make_unique<OpenXrPassthrough>(xr,session->handle());
     uint32_t count=0;
     XrCheck(xrEnumerateSwapchainFormats(session->handle(),0,&count,nullptr),"Enumerate XR formats");
@@ -577,8 +586,17 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       s.last_mode=mode;
       REXLOG_INFO("VR: view mode {} (0 immersive, 1 window, 2 window + room)",mode);
     }
-    if(!s.session->PollEvents() || !s.session->BeginFrame(frame)) return s.BenchmarkDesktop(input,scene,render);
+    if(!s.session->PollEvents() || !s.session->BeginFrame(frame)) {
+      PublishVrControls({}); return s.BenchmarkDesktop(input,scene,render);
+    }
     begun=true;
+    if(s.controllers) {
+      try { PublishVrControls(s.controllers->Sample(s.session->state()==XR_SESSION_STATE_FOCUSED)); }
+      catch(const std::exception& error) {
+        PublishVrControls({}); s.controllers.reset();
+        REXLOG_WARN("VR: controller input stopped: {}",error.what());
+      }
+    }
     constexpr auto valid=XR_VIEW_STATE_ORIENTATION_VALID_BIT|XR_VIEW_STATE_POSITION_VALID_BIT;
     if(!frame.should_render || (frame.view_flags&valid)!=valid) {
       s.session->EndFrame(frame); begun=false; return s.BenchmarkDesktop(input,scene,render);
@@ -751,6 +769,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     } else { s.session->EndFrame(frame); begun=false; }
     return rendered;
   } catch(const std::exception& error) {
+    PublishVrControls({});
     if(begun) { try { s.session->EndFrame(frame); } catch(...) {} }
     s.failed=true; REXLOG_ERROR("VR: stereo rendering stopped: {}",error.what());
     try { if(s.session) s.session->RequestExit(); } catch(...) {}

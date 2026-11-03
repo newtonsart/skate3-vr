@@ -1,5 +1,6 @@
 #include "openxr_context.h"
 #include "openxr_session.h"
+#include "openxr_gamepad.h"
 #include "openxr_passthrough.h"
 #include <algorithm>
 #include <chrono>
@@ -7,14 +8,16 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <memory>
 #include <stdexcept>
 #include <thread>
 
 int main(int argc, char** argv) {
   try {
     const bool passthrough = argc == 2 && std::strcmp(argv[1], "--passthrough") == 0;
-    const bool track = passthrough || (argc == 2 && std::strcmp(argv[1], "--track") == 0);
-    if (argc > 1 && !track) throw std::runtime_error("Usage: skate3-openxr-probe [--track|--passthrough]");
+    const bool controllers = argc == 2 && std::strcmp(argv[1], "--controllers") == 0;
+    const bool track = passthrough || controllers || (argc == 2 && std::strcmp(argv[1], "--track") == 0);
+    if (argc > 1 && !track) throw std::runtime_error("Usage: skate3-openxr-probe [--track|--passthrough|--controllers]");
     skate3::vr::OpenXrContext context;
     context.Initialize();
     std::printf("Runtime: %s\n", context.runtime().c_str());
@@ -47,13 +50,15 @@ int main(int argc, char** argv) {
     }
     skate3::vr::OpenXrSession session(context);
     session.Create(VK_API_VERSION_1_3);
+    std::unique_ptr<skate3::vr::OpenXrGamepad> gamepad;
+    if(controllers) gamepad=std::make_unique<skate3::vr::OpenXrGamepad>(context.instance(),session.handle());
     skate3::vr::OpenXrPassthrough room(context,session.handle());
     std::printf("Vulkan 1.3 session created on %s. Tracking only; no game images submitted.\n", session.gpu_name());
     using Clock = std::chrono::steady_clock;
     auto start = Clock::now();
     auto deadline = start + std::chrono::seconds(15);
     auto next_log = start;
-    uint32_t frames = 0, valid_head = 0, tracked_head = 0, valid_eyes = 0, renderable = 0;
+    uint32_t frames = 0, valid_head = 0, tracked_head = 0, valid_eyes = 0, renderable = 0, controller_samples = 0;
     XrSessionState previous = XR_SESSION_STATE_UNKNOWN;
     float minimum[3] = {INFINITY, INFINITY, INFINITY};
     float maximum[3] = {-INFINITY, -INFINITY, -INFINITY};
@@ -66,6 +71,11 @@ int main(int argc, char** argv) {
       if (!session.BeginFrame(frame)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;
+      }
+      skate3::vr::ControllerPad pad;
+      if(gamepad) {
+        pad=skate3::vr::MapTouchControls(gamepad->Sample(session.state()==XR_SESSION_STATE_FOCUSED));
+        controller_samples+=pad.connected;
       }
       if (passthrough && frame.should_render) {
         if (!room.Enable()) {
@@ -113,6 +123,8 @@ int main(int argc, char** argv) {
             static_cast<unsigned long long>(frame.head.locationFlags), p.x, p.y, p.z, q.x, q.y, q.z, q.w,
             double(frame.display_period) / 1e6, int(frame.should_render));
         next_log = Clock::now() + std::chrono::seconds(1);
+        if(gamepad) std::printf("Controller connected=%d buttons=0x%04x sticks=(%d,%d)/(%d,%d) triggers=%u/%u\n",
+            int(pad.connected),unsigned(pad.buttons),pad.lx,pad.ly,pad.rx,pad.ry,unsigned(pad.lt),unsigned(pad.rt));
       }
     }
     const bool room_submitted=room.layer()!=XR_NULL_HANDLE;
@@ -126,6 +138,8 @@ int main(int argc, char** argv) {
     if (!valid_head || !tracked_head || !valid_eyes) throw std::runtime_error("No valid tracked 6DoF/stereo samples");
     std::printf("Head position range: (%.4f %.4f %.4f)m\n", maximum[0]-minimum[0], maximum[1]-minimum[1], maximum[2]-minimum[2]);
     if (passthrough && !room_submitted) throw std::runtime_error("No renderable frame for passthrough test; activate Quest Link in the headset");
+    if(controllers && !controller_samples) throw std::runtime_error("No active Touch controls; focus this PCVR session and wake the controllers");
+    if(controllers) std::printf("Active controller samples: %u; button mapping still needs gameplay confirmation.\n",controller_samples);
     std::puts(passthrough ? "Passthrough layer submitted; headset visual confirmation is still required."
                          : "Vulkan session and predicted 6DoF/eye poses verified. Stereo image rendering remains untested.");
     return 0;

@@ -7,7 +7,7 @@ Packages are built locally; there is no GitHub Actions release workflow yet.
 
 ## Player setup
 
-Run `Skate3-VR-Setup-0.2.0-alpha.exe`. The Inno Setup wizard installs per user,
+Run `Skate3-VR-Setup-0.2.1-alpha.exe`. The Inno Setup wizard installs per user,
 without requesting administrator privileges. Choose:
 
 - Application location.
@@ -68,9 +68,9 @@ from the user's game art. The clean payload is packaged before any game runs.
 
 Outputs in `out/packages/`:
 
-- `Skate3-VR-Setup-0.2.0-alpha.exe`: installer.
-- `Skate3-VR-Windows-0.2.0-alpha.zip`: portable application.
-- `SHA256SUMS-0.2.0-alpha.txt`: package checksums.
+- `Skate3-VR-Setup-0.2.1-alpha.exe`: installer.
+- `Skate3-VR-Windows-0.2.1-alpha.zip`: portable application.
+- `SHA256SUMS-0.2.1-alpha.txt`: package checksums.
 
 The portable ZIP uses `game/` and `out/runtime-test/` beside the launcher by
 default; use **Install / finish setup** on first launch. For selectable folders,

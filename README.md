@@ -7,7 +7,7 @@
 # Skate 3 VR
 
 Play **Skate 3 in virtual reality**, with stereoscopic 3D, head tracking and
-your regular gamepad. Based on [Skate3Recomp](https://github.com/mchughalex/skate3recomp).
+your regular gamepad or Quest Touch controllers. Based on [Skate3Recomp](https://github.com/mchughalex/skate3recomp).
 
 **Experimental build:** tested on Windows with Quest 3 over wired Link.
 Other OpenXR headsets have not been tested yet. Game files are not included:
@@ -15,7 +15,7 @@ you need your own Xbox 360 copy of Skate 3.
 
 ## Getting started
 
-1. Run **`Skate3-VR-Setup-0.2.0-alpha.exe`** from a Windows package.
+1. Run **`Skate3-VR-Setup-0.2.1-alpha.exe`** from a Windows package.
    Choose the application folder, game files folder and save profiles folder.
    A desktop shortcut is optional; the Start menu shortcut is also available.
 2. Select your own **Skate 3 Xbox 360 ISO**. Setup extracts it with a progress
@@ -26,7 +26,8 @@ you need your own Xbox 360 copy of Skate 3.
    Choose **Main save**, or create a **New save profile** for separate progress.
 4. Connect your headset to the PC and start its **PCVR session**. On Quest,
    enter **Quest Link** and select Meta Link as the active OpenXR runtime.
-5. Connect an **Xbox or PlayStation gamepad** and choose a mode:
+5. Wake both **Quest Touch controllers**, or connect an **Xbox or PlayStation
+   gamepad**, and choose a mode:
 
 | Button | What you see |
 | --- | --- |
@@ -45,7 +46,22 @@ Publishing these packages as a GitHub release is a separate step.
 
 ## Controls and settings
 
-Gameplay uses the original gamepad controls; Touch controllers are not supported.
+Gameplay uses the original Xbox controls. In VR, Quest Touch buttons and sticks
+can also act as player 1, including menu/settings navigation:
+
+| Quest Touch | Xbox input |
+| --- | --- |
+| Sticks, stick clicks, A/B/X/Y | Same controls |
+| Index triggers | LT / RT |
+| Grip triggers | LB / RB |
+| Left Menu button | Start / pause |
+| Left Menu + X | Back |
+| Hold left stick click and tilt | D-pad (left stick movement is suppressed) |
+| Right grip + left Menu | RB + Start: mod settings |
+
+Touch support is experimental and still needs headset gameplay confirmation.
+There are no motion gestures or Touch vibration; the right Meta button keeps
+its system function. [Controller details and checks](docs/PCVR_CONTROLLERS.md).
 
 | Input | Action |
 | --- | --- |
