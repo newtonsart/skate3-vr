@@ -785,8 +785,9 @@ void ShowTitleUpdateInstallWizard(rex::ui::ImGuiDrawer* drawer, rex::PathConfig 
   options.fetch_working_status = "Downloading Title Update 3...";
   options.install_working_status = "Installing the title update...";
   options.done_status = "Title Update 3 installed.";
-  options.done_button_label = "Start Game";
-  options.launching_status = "Starting the game...";
+  const bool setup=rex::cvar::Query<bool>("skate3_setup_only");
+  options.done_button_label = setup ? "Finish installation" : "Start Game";
+  options.launching_status = setup ? "Finishing installation..." : "Starting the game...";
 
   auto fetch = [game_root](std::atomic<uint64_t>& copied_bytes, std::atomic<uint64_t>& total_bytes,
                            std::string& error) {

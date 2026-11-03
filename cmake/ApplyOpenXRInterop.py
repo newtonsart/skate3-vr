@@ -15,6 +15,23 @@ def apply(sdk):
             raise ValueError(f"Pinned SDK patch anchor mismatch: {name}: {old[:65]}")
         path.write_text(text.replace(old, new), encoding="utf-8")
 
+    edit("include/rex/ui/overlay/install_wizard_overlay.h",
+         " protected:\n  void OnClose() override;",
+         """  void BeginInstall(std::filesystem::path source, bool finish_when_done) {
+    finish_when_done_ = finish_when_done;
+    if (!source.empty()) StartInstall(std::move(source));
+  }
+ protected:
+  void OnClose() override;""")
+    edit("include/rex/ui/overlay/install_wizard_overlay.h",
+         "  int launch_frames_ = -1;",
+         "  int launch_frames_ = -1;\n  bool finish_when_done_ = false;")
+    edit("src/ui/overlay/install_wizard_overlay.cpp",
+         "void InstallWizardDialog::OnDraw(ImGuiIO& io) {\n  FinishInstallIfNeeded();",
+         """void InstallWizardDialog::OnDraw(ImGuiIO& io) {
+  FinishInstallIfNeeded();
+  if (finish_when_done_ && state_ == State::kInstalled && launch_frames_ < 0)
+    launch_frames_ = 1;""")
     edit("include/rex/ui/overlay/simple_settings_overlay.h",
          "  bool visible() const { return visible_; }",
          "  bool visible() const { return visible_; }\n"

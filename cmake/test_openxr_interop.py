@@ -14,7 +14,9 @@ FILES = ["include/rex/ui/vulkan/instance.h", "src/ui/vulkan/vulkan_instance.cpp"
          "src/ui/overlay/simple_settings_overlay.cpp",
          "include/rex/ui/imgui_drawer.h", "src/ui/imgui_drawer.cpp",
          "include/rex/ui/vulkan/presenter.h", "src/ui/vulkan/vulkan_presenter.cpp",
-         "src/graphics/vulkan/command_processor.cpp"]
+         "src/graphics/vulkan/command_processor.cpp",
+         "include/rex/ui/overlay/install_wizard_overlay.h",
+         "src/ui/overlay/install_wizard_overlay.cpp"]
 
 
 class InteropTests(unittest.TestCase):

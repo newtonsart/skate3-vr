@@ -96,6 +96,10 @@ REXCVAR_DECLARE(bool, skate3_native_render_scene_freecam_capture_input);
 
 REXCVAR_DEFINE_STRING(skate3_dlc_root, "", "Skate 3",
                       "Directory containing Skate 3 DLC package files");
+REXCVAR_DEFINE_BOOL(skate3_setup_only, false, "Setup", "Install game files and TU3, then exit without starting the game")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(skate3_install_iso, "", "Setup", "Local ISO selected by the Windows installer")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(skate3_auto_install_dlc, true, "Skate 3",
                     "Install DLC package files found in configured DLC folders");
 REXCVAR_DEFINE_BOOL(skate3_ultrawide, false, "Skate 3",
@@ -677,6 +681,11 @@ std::optional<rex::PathConfig> Skate3BaseApp::OnFinalizePaths(
     runtime_paths = std::move(tu_paths);
   }
 #endif
+  if (REXCVAR_GET(skate3_setup_only)) {
+    REXLOG_INFO("Setup completed: game files and title update are ready; gameplay was not started");
+    app_context().QuitFromUIThread();
+    return std::nullopt;
+  }
 #if defined(_WIN32)
   // Window/taskbar + Explorer icon sourced from the user's OWN game art at
   // runtime (game/nxeart); the shipped exe and the repo carry no EA
@@ -847,7 +856,8 @@ void Skate3BaseApp::OnPostSetup() {
 
 void Skate3BaseApp::OnPreSetup(rex::RuntimeConfig& config) {
 #if SKATE3_HAS_OPENXR
-  if (rex::cvar::Query<bool>("skate3_vr") || rex::cvar::Query<bool>("skate3_vr_resolution_test")) {
+  if (!REXCVAR_GET(skate3_setup_only) &&
+      (rex::cvar::Query<bool>("skate3_vr") || rex::cvar::Query<bool>("skate3_vr_resolution_test"))) {
     skate3::vr::InitializeGameVr();
     config.graphics = std::make_unique<rex::graphics::vulkan::VulkanGraphicsSystem>();
   }

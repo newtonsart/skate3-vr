@@ -13,6 +13,8 @@ endif()
 
 project(skate3 VERSION 2.0.0 LANGUAGES CXX)
 add_executable(skate3-movie-skip-test EXCLUDE_FROM_ALL src/skate3_movie_skip_test.cpp)
+add_executable(skate3-setup-test EXCLUDE_FROM_ALL src/skate3_setup_test.cpp)
+target_compile_features(skate3-setup-test PRIVATE cxx_std_20)
 
 if(WIN32)
     enable_language(RC)

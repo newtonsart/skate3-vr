@@ -44,6 +44,9 @@ Both modes share one OpenXR/Vulkan core; no Touch-controller gameplay planned.
   shorter player-focused README; keep build details in the linked guides.
 - [x] Add gamepad window placement/resize and a compact immersive camera editor
   with live world preview, input capture and apply/cancel controls.
+- [x] Add a Windows installer with selectable game/save paths, optional
+  shortcuts, setup without a headset and separate save profiles in the launcher.
+  Build and test notes: [PCVR_DISTRIBUTION.md](PCVR_DISTRIBUTION.md).
 - [ ] Validate live editor placement, stereo composition and camera preview
   visually in the headset. See [PCVR_SETTINGS.md](PCVR_SETTINGS.md).
 - [ ] Validate the window and passthrough visually on the headset; Meta settings

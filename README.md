@@ -15,11 +15,18 @@ you need your own Xbox 360 copy of Skate 3.
 
 ## Getting started
 
-1. Connect your headset to the PC and start its **PCVR session**. On Quest,
+1. Run **`Skate3-VR-Setup-0.2.0-alpha.exe`** from a Windows package.
+   Choose the application folder, game files folder and save profiles folder.
+   A desktop shortcut is optional; the Start menu shortcut is also available.
+2. Select your own **Skate 3 Xbox 360 ISO**. Setup extracts it with a progress
+   indicator and then offers to download TU3 or use your local update file.
+   You can select an existing game installation instead. No headset is needed
+   during setup, and your ISO is not modified or uploaded.
+3. Open **Skate 3 VR** from its shortcut or **[Skate3-VR.cmd](Skate3-VR.cmd)**.
+   Choose **Main save**, or create a **New save profile** for separate progress.
+4. Connect your headset to the PC and start its **PCVR session**. On Quest,
    enter **Quest Link** and select Meta Link as the active OpenXR runtime.
-2. Connect an **Xbox or PlayStation gamepad**.
-3. Double-click **[Skate3-VR.cmd](Skate3-VR.cmd)** in the project folder.
-4. Choose a mode in the launcher:
+5. Connect an **Xbox or PlayStation gamepad** and choose a mode:
 
 | Button | What you see |
 | --- | --- |
@@ -27,10 +34,14 @@ you need your own Xbox 360 copy of Skate 3.
 | **3D window** | A floating screen with the desktop framing and stereoscopic depth. |
 | **3D window + passthrough** | The 3D screen over a view of your room, when supported by Meta Link. |
 
-**No launch commands needed.** The launcher uses the VR build in
-`out/build/relwithdebinfo` and the extracted game in `game/`.
-If either is missing, it displays an error: follow the [VR setup and build guide](docs/PCVR_BUILD.md#build-the-openxr-game-on-windows).
-Cloning this repository does not automatically install or build the game.
+**No launch commands needed.** If game setup was interrupted, use
+**Install / finish setup** in the launcher. It checks the required game files
+and TU3 before enabling VR modes.
+
+This repository contains source code; cloning it does not install the game.
+For a source checkout, follow the [VR build guide](docs/PCVR_BUILD.md#build-the-openxr-game-on-windows).
+Developers can generate the installer and ZIP with the [Windows packaging guide](docs/PCVR_DISTRIBUTION.md).
+Publishing these packages as a GitHub release is a separate step.
 
 ## Controls and settings
 
@@ -84,10 +95,14 @@ If Meta does not expose passthrough, the window uses a black background.
 
 ## Saves and settings
 
-The launcher uses the existing VR test profile in **`out/runtime-test/`**.
-Your profile, saves and settings are kept there; preserve this folder when updating.
-If you previously used a different user-data folder, the launcher does not migrate
-those saves. Running `skate3.exe` directly may use a different profile folder.
+Setup lets you choose where to keep your saves. **Main save** uses that folder;
+each **New save profile** gets a separate progress directory. New profiles copy
+your main graphics settings, but do not copy its saved progress.
+Updating or uninstalling the application keeps the game and save folders.
+
+Existing source-checkout users keep **`out/runtime-test/`** as Main save, so their
+current progress is preserved. No existing saves are moved or deleted.
+Running `skate3.exe` directly may use a different profile folder.
 
 ## Troubleshooting
 

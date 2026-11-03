@@ -1,4 +1,7 @@
 #include "skate3_iso_installer.h"
+#include "skate3_iso_path.h"
+#include <rex/cvar.h>
+#include <rex/filesystem.h>
 
 #include <algorithm>
 #include <array>
@@ -59,28 +62,6 @@ std::string ToLower(std::string value) {
     return static_cast<char>(std::tolower(c));
   });
   return value;
-}
-
-bool IsUnsafeIsoPath(std::string_view path) {
-  if (path.empty() || path.starts_with('/') || path.starts_with('\\')) {
-    return true;
-  }
-  size_t start = 0;
-  while (start <= path.size()) {
-    size_t end = path.find('/', start);
-    if (end == std::string_view::npos) {
-      end = path.size();
-    }
-    auto component = path.substr(start, end - start);
-    if (component.empty() || component == "." || component == "..") {
-      return true;
-    }
-    if (end == path.size()) {
-      break;
-    }
-    start = end + 1;
-  }
-  return false;
 }
 
 #if defined(_WIN32)
@@ -202,8 +183,8 @@ class XboxIsoReader {
       return false;
     }
 
-    if (!HasFile(kDefaultXex)) {
-      error = "The ISO does not contain default.xex.";
+    if (!HasFile(kDefaultXex) || !HasFile("data/webkit/EAWebkit.xex")) {
+      error = "The ISO does not contain the required Skate 3 executables.";
       return false;
     }
 
@@ -232,6 +213,11 @@ class XboxIsoReader {
     if (ec) {
       error = "Unable to create the game directory.";
       return false;
+    }
+    const auto marker=target_root / ".skate3-vr-installing";
+    {
+      std::ofstream pending(marker,std::ios::binary|std::ios::trunc);
+      if (!pending) { error="Unable to mark the installation as in progress."; return false; }
     }
 
     std::vector<uint8_t> buffer(4 * 1024 * 1024);
@@ -271,8 +257,12 @@ class XboxIsoReader {
         read_offset += chunk;
         copied_bytes.fetch_add(chunk, std::memory_order_relaxed);
       }
+      out.close();
+      if (!out) { error="Failed to finish writing " + entry.path + "."; return false; }
     }
 
+    std::filesystem::remove(marker,ec);
+    if (ec) { error="Unable to mark the installation as complete."; return false; }
     return true;
   }
 
@@ -360,7 +350,9 @@ class XboxIsoReader {
 }  // namespace
 
 bool IsGameInstalled(const std::filesystem::path& game_root) {
-  return std::filesystem::is_regular_file(game_root / std::string(kDefaultXex));
+  return std::filesystem::is_regular_file(game_root / std::string(kDefaultXex)) &&
+      std::filesystem::is_regular_file(game_root / "data/webkit/EAWebkit.xex") &&
+      !std::filesystem::exists(game_root / ".skate3-vr-installing");
 }
 
 void ShowRexglueIsoInstallWizard(rex::ui::ImGuiDrawer* drawer, rex::PathConfig runtime_paths,
@@ -389,7 +381,7 @@ void ShowRexglueIsoInstallWizard(rex::ui::ImGuiDrawer* drawer, rex::PathConfig r
     return true;
   };
 
-  new rex::ui::InstallWizardDialog(
+  auto* wizard = new rex::ui::InstallWizardDialog(
       drawer, "Setup", "Game Files",
       "Skate 3 game files were not found. Select your Xbox 360 ISO to install them.",
       game_root.string(), std::move(pick_source), std::move(install),
@@ -398,6 +390,11 @@ void ShowRexglueIsoInstallWizard(rex::ui::ImGuiDrawer* drawer, rex::PathConfig r
           complete(std::move(runtime_paths));
         }
       });
+#if SKATE3_HAS_OPENXR
+  const auto iso=rex::cvar::Query<std::string>("skate3_install_iso");
+  const bool setup=rex::cvar::Query<bool>("skate3_setup_only");
+  if (setup || !iso.empty()) wizard->BeginInstall(rex::to_path(iso),setup);
+#endif
 }
 
 bool RunRexglueIsoInstallWizardBlocking(rex::ui::WindowedAppContext& app_context,
