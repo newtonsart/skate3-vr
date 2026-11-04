@@ -1,11 +1,10 @@
 # PCVR development
 
-The fork's `main` branch includes the PCVR implementation. Experimental native stereo gameplay now
-runs on Quest 3. The user has confirmed that the world fuses and that frontend
-menus are visible and the HUD is improved. Complete rear-view visibility across
-levels still requires validation. The user also confirmed a complete, readable
-pause menu and improved brightness after the color fix below. The standalone
-OpenXR probe only checks runtime/session/tracking; it does not render the game.
+The current `main` branch builds the OpenXR integration against the
+rubensteezy fork and ReXGlue 0.10. The migrated build compiles, but has not yet
+been tested in a headset. Earlier VR builds were tested on Quest 3 over wired
+Quest Link; their results do not establish compatibility of this migration.
+The standalone OpenXR probe checks the runtime and tracking, not game rendering.
 
 ## Prepare local game data
 
@@ -21,9 +20,10 @@ python cmake/test_extract_game_iso.py
 ```
 
 This supports the XDVDFS partitions recognized by the game's own ISO installer.
-It does not read GOD ZIPs. Supply TU3 using `SKATE3_TITLE_UPDATE_PACKAGE` as
-described in [the base build guide](DESKTOP.md#building-from-source).
-Keep all retail data and update packages local.
+It does not read GOD ZIPs. Supply the TU3 package with
+`SKATE3_TITLE_UPDATE_PACKAGE`, or use an installed game folder with the staged
+TU3 patches, as documented in [upstream build instructions](https://github.com/rubensteezy/skate3recomp#building-from-source).
+Keep all retail game data and update packages local.
 
 ## Build the OpenXR game on Windows
 
@@ -37,16 +37,23 @@ patch refuses a source checkout containing `.git`; keep the original submodule
 and any unrelated local changes intact. In PowerShell, from the repository root:
 
 ```powershell
+git clone --recursive https://github.com/newtonsart/skate3-vr.git
+Set-Location skate3-vr
 New-Item -ItemType Directory -Force out | Out-Null
 robocopy third_party/rexglue-sdk out/rexglue-vr /E /XD .git out /XF .git
 if ($LASTEXITCODE -ge 8) { throw "SDK copy failed" }
 git clone --branch release-1.1.54 --depth 1 https://github.com/KhronosGroup/OpenXR-SDK.git out/tools/OpenXR-SDK
 
+# Prevent the copied SDK from reading the parent repository's version tags.
+$env:GIT_CEILING_DIRECTORIES = (Get-Location).Path
+# Set this to your local TU3 package; omit it if the game folder has staged patches.
+$tu3Package = "C:/path/to/TU_12K2276_000000C000000.00000000000O3"
 $vrArgs = @(
   "-DCMAKE_C_COMPILER=clang"
   "-DCMAKE_CXX_COMPILER=clang++"
   "-DREXSDK_DIR=$PWD/out/rexglue-vr"
   "-DSKATE3_GAME_DATA_ROOT=$PWD/game"
+  "-DSKATE3_TITLE_UPDATE_PACKAGE=$tu3Package"
   "-DSKATE3_ENABLE_OPENXR=ON"
   "-DSKATE3_OPENXR_SDK_DIR=$PWD/out/tools/OpenXR-SDK"
   "-DSKATE3_VULKAN_LIBRARY=$env:VULKAN_SDK/Lib/vulkan-1.lib"
@@ -65,7 +72,7 @@ build, `cmake --build --preset relwithdebinfo --target skate3 --parallel 8` uses
 the cached SDK path. The [base desktop guide](DESKTOP.md#building-from-source)
 does not enable VR.
 
-The original `vr-v0.1.0-alpha` tag remains a historical checkpoint. Current
+The original `vr-v0.1.0-alpha` tag is a historical checkpoint if available in your clone. Current
 settings, pause, window and image-quality work is included on `main`.
 
 ## Launch without a terminal
@@ -177,7 +184,9 @@ Boot logos still skip immediately. The user confirmed that the corrected build
 passes the difficulty screen. `skate3-movie-skip-test` checks the timing gate;
 `skate3-stereo-math-test` checks eye matrices and HUD placement.
 
-## Recovery and validation notes
+## Historical recovery and validation notes
+
+The observations below describe earlier builds, not validation of the current migration.
 
 The attempted replacement of guest culling planes and additional native eye
 culling were removed after the user reported missing ground and incorrect NPC

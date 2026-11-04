@@ -46,8 +46,8 @@ migration has not yet been validated or published.
 and TU3 before enabling VR modes.
 
 This repository contains source code; cloning it does not install the game.
-The [VR build guide](docs/PCVR_BUILD.md#build-the-openxr-game-on-windows)
-describes the earlier SDK workflow and needs updating for the current migration.
+Follow the [VR build guide](docs/PCVR_BUILD.md#build-the-openxr-game-on-windows)
+for the current migrated source build.
 Developers can generate the installer and ZIP with the [Windows packaging guide](docs/PCVR_DISTRIBUTION.md).
 Publishing these packages as a GitHub release is a separate step.
 
