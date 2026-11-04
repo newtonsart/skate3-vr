@@ -7,13 +7,19 @@
 # Skate 3 VR
 
 Play **Skate 3 in virtual reality**, with stereoscopic 3D, head tracking and
-your regular gamepad or Quest Touch controllers. Based on [Skate3Recomp](https://github.com/mchughalex/skate3recomp).
+your regular gamepad or Quest Touch controllers. This project builds on
+[rubensteezy/skate3recomp](https://github.com/rubensteezy/skate3recomp),
+a continuation of [mchughalex/skate3recomp](https://github.com/mchughalex/skate3recomp).
 
-**Experimental build:** tested on Windows with Quest 3 over wired Link.
-Other OpenXR headsets have not been tested yet. Game files are not included:
-you need your own Xbox 360 copy of Skate 3.
+**Experimental:** the earlier VR build was tested on Windows with Quest 3 over
+wired Link. The migration to the newer upstream and ReXGlue SDK compiles, but
+has not yet been tested in a headset. Other OpenXR headsets remain untested.
+Game files are not included; you need your own Xbox 360 copy of Skate 3.
 
 ## Getting started
+
+The following describes the earlier VR package. A package based on the current
+migration has not yet been validated or published.
 
 1. Run **`Skate3-VR-Setup-0.2.5-alpha.exe`** from a Windows package.
    Choose the application folder, game files folder and save profiles folder.
@@ -40,7 +46,8 @@ you need your own Xbox 360 copy of Skate 3.
 and TU3 before enabling VR modes.
 
 This repository contains source code; cloning it does not install the game.
-For a source checkout, follow the [VR build guide](docs/PCVR_BUILD.md#build-the-openxr-game-on-windows).
+The [VR build guide](docs/PCVR_BUILD.md#build-the-openxr-game-on-windows)
+describes the earlier SDK workflow and needs updating for the current migration.
 Developers can generate the installer and ZIP with the [Windows packaging guide](docs/PCVR_DISTRIBUTION.md).
 Publishing these packages as a GitHub release is a separate step.
 
@@ -161,7 +168,8 @@ VR development is on **`main`** in [skate3-vr](https://github.com/newtonsart/ska
 - [Project status and remaining work](docs/PCVR_ROADMAP.md)
 - [Base-project desktop, DLC and build documentation](docs/DESKTOP.md)
 
-Credit to [Skate3Recomp and its contributors](https://github.com/mchughalex/skate3recomp),
+Credit to [rubensteezy/skate3recomp](https://github.com/rubensteezy/skate3recomp),
+[mchughalex/skate3recomp and its contributors](https://github.com/mchughalex/skate3recomp),
 the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) and
 [Xenia](https://github.com/xenia-project/xenia), whose research and tooling
 have contributed to the recompilation ecosystem.
