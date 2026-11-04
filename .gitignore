@@ -19,6 +19,7 @@ TU_*
 __pycache__/
 
 # Local runtime/config overrides
+install.ini
 skate3.toml
 skate3_ultrawide_targets*.toml
 CMakeUserPresets.json

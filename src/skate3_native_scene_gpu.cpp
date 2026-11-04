@@ -4908,7 +4908,7 @@ void WarmItemResources(const NativeGuestOutputRenderContext& context, uint8_t* b
       ++wc.deferred;
     }
   }
-  if (need_mesh) {
+  if (need_mesh && !MeshMissBackingOff(item, frame_number)) {
     if (!within()) {
       ++wc.deferred;
     } else {
@@ -12656,6 +12656,13 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
       std::lock_guard<std::mutex> lock(g_2d_mutex);
       scene_2d = g_scene_2d;
     }
+#if SKATE3_HAS_OPENXR
+    // Keep the native Options screen from covering the live editor preview.
+    if (user_data && static_cast<skate3::vr::EyeCamera*>(user_data)->override_camera &&
+        rex::cvar::Query<int32_t>("skate3_vr_edit_mode") != 0) {
+      scene_2d.clear();
+    }
+#endif
     if (!scene_2d.empty()) {
 #if SKATE3_HAS_OPENXR
       int loading_backdrop=-1;

@@ -84,6 +84,7 @@ class Skate3BaseApp : public rex::ReXApp {
   };
   std::shared_ptr<CallbackGate> callback_gate_ = std::make_shared<CallbackGate>();
   std::unique_ptr<rex::ui::SimpleSettingsDialog> simple_settings_dialog_;
+  bool vr_editor_from_options_ = false;
   std::unique_ptr<skate3::NativeDebugDialog> native_debug_dialog_;
   std::unique_ptr<skate3::RenderModeIndicator> render_mode_indicator_;
   bool recipe_overlay_installed_ = false;

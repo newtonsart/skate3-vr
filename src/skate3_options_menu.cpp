@@ -98,6 +98,7 @@ constexpr uint32_t kStateRowOffset = 72;
 
 // Literal ("#") string ID the GameSettings natives push for "nothing".
 constexpr uint32_t kStringEmpty = 0x822039C4;
+constexpr uint32_t kStringSelect = 0x822039B0;  // the game's option-row A prompt
 
 // Input handler events (FrontEndState_Options vtable +40).
 constexpr uint32_t kInputBack = 3;
@@ -151,6 +152,7 @@ struct Row {
   std::function<int()> get;        // label index the cvars select
   std::function<void(int)> set;    // write the cvars for a label index
   std::function<bool()> enabled;   // null = always enabled
+  std::function<void()> action;    // A activates an option row instead of a selector
   bool rebuild_on_change = false;  // other rows' enabled state depends on it
   bool restart = false;
   std::optional<int> pending;      // restart rows: staged label index
@@ -241,6 +243,9 @@ int ShownIndex(const Row& row) { return row.pending.value_or(row.get()); }
 // The shown label, or null for a row without labels or whose getter answers
 // out of range (the table getters then show nothing instead of indexing).
 std::optional<int> ShownLabel(const Row& row) {
+  if (row.labels.empty()) {
+    return std::nullopt;
+  }
   const int index = ShownIndex(row);
   if (index < 0 || index >= static_cast<int>(row.labels.size())) {
     return std::nullopt;
@@ -393,6 +398,79 @@ Page BuildGraphicsPage(const RestartSettings& settings) {
   return page;
 }
 
+void AddVrRows(Page& page) {
+  if (!HasCvar("skate3_vr") ||
+      (!rex::cvar::Query<bool>("skate3_vr") && !rex::cvar::Query<bool>("skate3_vr_settings_test"))) {
+    return;
+  }
+  const auto immersive = [] { return rex::cvar::Query<int32_t>("skate3_vr_mode") == 0; };
+  const auto window = [] { return rex::cvar::Query<int32_t>("skate3_vr_mode") != 0; };
+  auto* mode = AddStringChoice(page, "VR View", "Choose immersive VR, a stereo window or passthrough.",
+                             {"Immersive VR", "3D window", "3D window + room view"},
+                             {"0", "1", "2"}, "skate3_vr_mode");
+  mode->rebuild_on_change = true;
+  auto action = [&](const char* title, const char* desc, std::function<void()> callback,
+                    std::function<bool()> enabled = {}) {
+    auto* row = AddRow(page, title, desc);
+    row->action = std::move(callback);
+    row->enabled = std::move(enabled);
+  };
+  action("Move window", "Point and grip with Touch, or use the sticks. A places; B cancels.", [] {
+    rex::cvar::SetFlagByName("skate3_vr_edit_mode", "1");
+    if (g_open_settings) g_open_settings();
+  }, window);
+  action("Adjust camera", "Left stick: height. Right stick: distance. A applies; B cancels.", [] {
+    rex::cvar::SetFlagByName("skate3_vr_edit_mode", "2");
+    if (g_open_settings) g_open_settings();
+  }, immersive);
+  AddNumberChoice(page, "VR Render Resolution", "Higher resolution increases GPU workload. Applies immediately.",
+                  {"Desktop (compatibility)", "HMD 75%", "HMD 100%", "HMD 125%"},
+                  {0, 0.75, 1, 1.25}, {"skate3_vr_render_scale"});
+  auto distance = [&](const char* title, const char* cvar, int minimum, int maximum,
+                      const char* desc, std::function<bool()> enabled = {}) {
+    std::vector<std::string> labels;
+    std::vector<double> values;
+    for (int tenth = minimum; tenth <= maximum; ++tenth) {
+      char label[24];
+      std::snprintf(label, sizeof(label), "%.1f%s", tenth / 10.0,
+                    std::string_view(cvar) == "skate3_vr_world_scale" ? "" : " m");
+      labels.emplace_back(label);
+      values.push_back(tenth / 10.0);
+    }
+    auto* row = AddNumberChoice(page, title, desc, std::move(labels), std::move(values), {cvar});
+    row->enabled = std::move(enabled);
+  };
+  distance("VR Window Width", "skate3_vr_window_width", 5, 60, "Floating window width.", window);
+  distance("VR Window Distance", "skate3_vr_window_distance", 5, 80, "Floating window distance.", window);
+  distance("VR Window Height", "skate3_vr_window_height", -20, 20, "Floating window height.", window);
+  auto* edges = AddNumberChoice(page, "VR Window Edges", "Fade the border into passthrough. The centre stays opaque.",
+                              {"Sharp", "Soft", "Wide"}, {0, 0.04, 0.08}, {"skate3_vr_window_feather"});
+  edges->enabled = [] { return rex::cvar::Query<int32_t>("skate3_vr_mode") == 2; };
+  auto* depth = AddNumberChoice(page, "VR Window Depth", "Stereo depth calibrated to the window size and game camera.",
+                              {"Flat", "Reduced", "Natural"}, {0, 0.5, 1}, {"skate3_vr_window_depth"});
+  depth->enabled = window;
+  auto* facing = AddToggle(page, "Face Viewer While Placing", "Face the viewer while placing; confirmation anchors orientation.",
+                          {"skate3_vr_window_face_viewer"});
+  facing->enabled = window;
+  AddToggle(page, "VR Editor Comfort View", "Use a front window for photo and object editors.", {"skate3_vr_editor_comfort"});
+  auto* loading = AddToggle(page, "VR Loading Symbol Only", "Remove the loading symbol's black backdrop in immersive VR.",
+                           {"skate3_vr_clear_hud_backdrop"});
+  loading->enabled = immersive;
+  auto* pause = AddToggle(page, "VR Pause View", "Keep the stereo world behind the original pause menu.", {"skate3_vr_pause_in_world"});
+  pause->labels = {"Flat panel", "Menu over 3D world"};
+  distance("VR Camera Distance", "skate3_vr_camera_distance", -20, 80, "Offset behind the original follow camera; zero preserves its position.", immersive);
+  distance("VR Camera Height", "skate3_vr_camera_height", -20, 40, "Height offset from the original follow camera.", immersive);
+  distance("VR World Scale", "skate3_vr_world_scale", 1, 30, "Game units per physical metre; affects world size and head movement.");
+  distance("VR HUD Width", "skate3_vr_hud_width", 5, 30, "Width of the readable immersive HUD.", immersive);
+  distance("VR HUD Distance", "skate3_vr_hud_distance", 5, 50, "Distance to the immersive HUD.", immersive);
+  action("Recenter VR", "Recenter the view or place the window in front of you. Ctrl+F8 also works.", [] {
+    rex::cvar::SetFlagByName("skate3_vr_recenter_requested", "true");
+  });
+  action("Capture VR frame", "Save the next game frame locally for visual troubleshooting.", [] {
+    rex::cvar::SetFlagByName("skate3_vr_capture_once", "true");
+  });
+}
+
 Page BuildViewPage() {
   Page page{"View"};
   {
@@ -419,6 +497,7 @@ Page BuildViewPage() {
   AddToggle(page, "Renderer Indicator",
             "Corner readout of which renderer drew the last frame (Native or Emulated).",
             {"skate3_native_render_mode_indicator"});
+  AddVrRows(page);
   return page;
 }
 
@@ -716,6 +795,9 @@ int SteppedIndex(int shown, int delta, int count) {
 // Live rows apply and save immediately; restart rows only stage the choice.
 // A row without labels has nothing to step to: no sound, no change.
 bool StepRow(PPCContext& ctx, uint8_t* base, uint32_t state, Row& row, int delta) {
+  if (row.action) {
+    return false;
+  }
   const int index = SteppedIndex(ShownIndex(row), delta, static_cast<int>(row.labels.size()));
   if (index < 0) {
     return false;
@@ -1079,12 +1161,16 @@ extern "C" REX_FUNC(sub_8260EA48) {
 // ---- FrontEndState_Options methods (r3 = state) -------------------------------
 
 // OnMenuSelect(menu, row = r5, item name). Our root rows open their page or
-// the overlay, or ask to quit; on our pages A does nothing, as on the game's
-// own selectors.
+// the overlay, or ask to quit; on our pages A activates action rows.
 extern "C" REX_FUNC(sub_8260D290) {
   if (IsInstalled()) {
     const uint32_t state = ctx.r3.u32;
-    if (PageOf(base, state)) {
+    if (Page* page = PageOf(base, state)) {
+      Row* row = RowAt(*page, ctx.r5.u32);
+      if (row && row->action && RowEnabled(*row)) {
+        PlaySound(ctx, base, kSubmenuSound);
+        row->action();
+      }
       return;
     }
     if (const RootRow* root = RootRowAt(base, state, ctx.r5.u32)) {
@@ -1209,12 +1295,13 @@ extern "C" REX_FUNC(sub_825A6F70) {
   __imp__sub_825A6F70(ctx, base);
 }
 
-// GameSettings_GetOptionType(row): every page row is a selector.
+// GameSettings_GetOptionType(row): editor/recenter actions use the game's option widget.
 extern "C" REX_FUNC(sub_825A6CE0) {
   if (IsInstalled()) {
     ArgRegisters args(ctx);
-    if (PageOf(base, OptionsState(ctx, base))) {
-      AptReturnString(ctx, base, g_type_selector);
+    if (Page* page = PageOf(base, OptionsState(ctx, base))) {
+      const Row* row = RowAt(*page, static_cast<uint32_t>(AptArgInt(ctx, base, 0)));
+      AptReturnString(ctx, base, row && row->action ? g_type_option : g_type_selector);
       return;
     }
     args.Restore();
@@ -1271,13 +1358,14 @@ extern "C" REX_FUNC(sub_82EDE7A8) {
   SaveClosed(root);
 }
 
-// GameSettings_GetButtonHelpTextA(): no A prompt on page rows (all
-// selectors), as the game does for its own selectors.
+// GameSettings_GetButtonHelpTextA(): show Select only for enabled actions.
 extern "C" REX_FUNC(sub_825A6FE0) {
   if (IsInstalled()) {
     ArgRegisters args(ctx);
-    if (PageOf(base, OptionsState(ctx, base))) {
-      AptReturnString(ctx, base, kStringEmpty);
+    const uint32_t state = OptionsState(ctx, base);
+    if (Page* page = PageOf(base, state)) {
+      const Row* row = RowAt(*page, REX_LOAD_U32(state + kStateRowOffset));
+      AptReturnString(ctx, base, row && row->action && RowEnabled(*row) ? kStringSelect : kStringEmpty);
       return;
     }
     args.Restore();

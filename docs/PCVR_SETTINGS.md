@@ -1,13 +1,30 @@
 # VR settings and pause over the stereo world
 
-The OpenXR build now draws the recompilation's existing settings menu into a
-Vulkan texture and composes it as an additional headset panel. Gameplay keeps
-its independent eye views behind the settings panel. This is the mod's settings
-menu, accessible from inside the game; it does not add an entry to the retail
-game's APT pause-menu assets.
+VR settings are available directly in the game's **Options → View** page,
+using the original menu's controls, descriptions and scrolling. The mode,
+resolution, window, camera, HUD and comfort settings apply immediately and
+share the existing settings file. Rows unavailable in the current VR mode
+are disabled. The VR rows appear only in VR runs or the explicit desktop
+settings diagnostic.
+
+**Move window** and **Adjust camera** open the existing compact live editor.
+Apply or cancel returns to the native menu after the confirmation buttons
+are released. The game's HUD/menu draws are hidden in the world-eye preview
+while editing, so the native Options page does not obscure the scene.
+Recenter and frame capture are also native action rows.
+
+The alternative **RB + Start → Video** panel remains available. The OpenXR
+build draws that panel into a Vulkan texture and composes it in the headset,
+with independent eye views behind it. The same surface serves live editors
+and system dialogs.
+
+The native VR row changes compile and pass `python cmake/test_vr_options_menu.py`
+(run in a C++ developer shell). Headset navigation and editor transitions
+still require hardware validation.
 
 ## Access and options
 
+- **Start → Options → View** opens the native VR controls.
 - **RB + Start** opens settings with the default controller chord. If you
   changed Menu Shortcut under Controls, use that combination instead.
 - **F1** or **Escape** opens settings from the keyboard.

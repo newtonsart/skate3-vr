@@ -21,6 +21,7 @@
 #include "stereo_math.h"
 #include "cull_frustum.h"
 #include "gpu_timing.h"
+#include "perf_trace.h"
 #include "vr_color_spirv.h"
 #define XR_USE_GRAPHICS_API_VULKAN
 #include <openxr/openxr_platform.h>
@@ -75,6 +76,7 @@ REXCVAR_DEFINE_BOOL(skate3_vr_expand_game_frustum, true, "VR", "Expand the match
 REXCVAR_DEFINE_BOOL(skate3_vr_share_frame_work, true, "VR", "Share the scene copy and light-space shadows between eyes");
 REXCVAR_DEFINE_BOOL(skate3_vr_gpu_timing, false, "VR", "Measure GPU render and transfer times per eye")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(skate3_vr_perf_trace, false, "VR", "Log periodic VR frame timing summaries");
 REXCVAR_DEFINE_BOOL(skate3_vr_compare_frame_work, false, "VR", "Log 600 alternating separate/shared-work samples; desktop camera if XR is inactive")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
@@ -130,6 +132,8 @@ struct State {
   float timestamp_period=0;
   double gpu_render_ms[2]{-1,-1},gpu_copy_ms[2]{-1,-1};
   uint32_t perf_samples=0;
+  PerfTrace trace;
+  std::chrono::steady_clock::time_point trace_last_submit{};
   VkDescriptorSetLayout color_layout=VK_NULL_HANDLE;
   VkDescriptorPool color_pool=VK_NULL_HANDLE;
   VkDescriptorSet color_set=VK_NULL_HANDLE;
@@ -618,9 +622,12 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       s.last_mode=mode;
       REXLOG_INFO("VR: view mode {} (0 immersive, 1 window, 2 window + room)",mode);
     }
+    const auto wait_start=std::chrono::steady_clock::now();
     if(!s.session->PollEvents() || !s.session->BeginFrame(frame)) {
+      s.trace_last_submit={}; s.trace.have_scene=s.trace.have_yaw=false;
       PublishVrControls({}); PublishWindowMotion({}); return s.BenchmarkDesktop(input,scene,render);
     }
+    const double xr_wait_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-wait_start).count();
     begun=true;
     TouchControls controls;
     ControllerHands hands;
@@ -636,6 +643,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     }
     constexpr auto valid=XR_VIEW_STATE_ORIENTATION_VALID_BIT|XR_VIEW_STATE_POSITION_VALID_BIT;
     if(!frame.should_render || (frame.view_flags&valid)!=valid) {
+      s.trace_last_submit={}; s.trace.have_scene=s.trace.have_yaw=false;
       PublishVrControls({}); PublishWindowMotion({});
       s.session->EndFrame(frame); begun=false; return s.BenchmarkDesktop(input,scene,render);
     }
@@ -815,6 +823,28 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
         }
       }
       s.session->EndFrame(frame,layer_count,layers); begun=false;
+      if (REXCVAR_GET(skate3_vr_perf_trace) && world_rendered && scene && !capture) {
+        const auto now=std::chrono::steady_clock::now();
+        const double interval=s.trace_last_submit.time_since_epoch().count() ?
+            std::chrono::duration<double,std::milli>(now-s.trace_last_submit).count() : 0;
+        s.trace_last_submit=now;
+        const double gpu=s.timing && s.gpu_render_ms[0]>=0 && s.gpu_render_ms[1]>=0 ?
+            s.gpu_render_ms[0]+s.gpu_render_ms[1] : -1;
+        const double period=double(frame.display_period)/1e6;
+        s.trace.Add(interval,period,render_ms[0]+render_ms[1],copy_ms[0]+copy_ms[1],xr_wait_ms,gpu,
+                    scene->generation,scene->view_proj,scene->proj);
+        if (s.trace.frames>=120) {
+          const auto& t=s.trace;
+          REXLOG_INFO("VR trace: frames={} scene={} items={} period={:.2f}ms submit-interval avg/max={:.2f}/{:.2f}ms over-1.5x={} repeated-scene={} yaw-travel={:.1f}deg CPU-render-max={:.2f}ms transfer-wait-max={:.2f}ms GPU-render-max={:.2f}ms GPU-samples={} XR-poll-and-begin-max={:.2f}ms",
+              t.frames,scene->generation,scene->items.size(),period,t.intervals?t.interval_sum/t.intervals:0,
+              t.interval_max,t.slow,t.repeated,t.yaw_travel*180/3.14159265358979323846,
+              t.render_max,t.wait_max,t.gpu_samples?t.gpu_max:-1,t.gpu_samples,t.xr_wait_max);
+          REXLOG_INFO("VR trace worst interval: scene={} interval={:.2f}ms yaw-delta={:.2f}deg CPU-render={:.2f}ms transfer-wait={:.2f}ms GPU-render={:.2f}ms XR-poll-and-begin={:.2f}ms",
+              t.worst_scene,t.interval_max,t.worst_yaw_delta<0?-1:t.worst_yaw_delta*180/3.14159265358979323846,
+              t.worst_render,t.worst_wait,t.worst_gpu,t.worst_xr_wait);
+          s.trace.ResetWindow();
+        }
+      } else { s.trace_last_submit={}; s.trace.have_scene=s.trace.have_yaw=false; }
       if (compare && world_rendered && scene && scene->generation>300 && scene->items.size()>100 && !capture) {
         REXLOG_INFO("VR perf sample: mode={} display=headset items={} CPU-render={:.4f} CPU-scene-copy={:.4f} GPU-render={:.4f} GPU-copy={:.4f}",
             share_work?"shared":"separate",scene->items.size(),render_ms[0]+render_ms[1],

@@ -4,7 +4,7 @@
 
 // The recomp settings in the game's own Options screen (FrontEndState_Options,
 // options.apt): Display, Graphics, View, PC Controls and System rows on the
-// root Options screen open pages of native selector rows, and All PC Settings
+// root Options screen open native settings pages (View includes VR), and All PC Settings
 // opens the full host settings overlay, and Quit Game exits after a Quit /
 // Cancel prompt. Restart-required settings are staged and applied through a
 // Restart Now / Discard Changes prompt on Back.

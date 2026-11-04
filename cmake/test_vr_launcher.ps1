@@ -57,6 +57,10 @@ try {
     [IO.File]::WriteAllText($incompleteMarker, '')
     Assert-LaunchError $fixture 'Title Update 3'
     [IO.File]::Delete($incompleteMarker)
+    $incompleteMarker=Join-Path $fixture 'game\.skate3_install_incomplete'
+    [IO.File]::WriteAllText($incompleteMarker, '')
+    Assert-LaunchError $fixture 'Title Update 3'
+    [IO.File]::Delete($incompleteMarker)
     foreach ($mode in 0..2) {
         $options = Get-VrLaunchOptions -Root $fixture -Mode $mode
         Assert ($options.FilePath -eq (Join-Path $build.FullName 'skate3.exe')) 'Wrong executable'
@@ -64,6 +68,9 @@ try {
         Assert ($options.ArgumentList -contains "--skate3_vr_mode=$mode") 'Wrong VR mode'
         Assert ($options.ArgumentList -contains '--skate3_vr=true') 'VR not enabled'
         Assert ($options.ArgumentList -contains '--gpu_backend=vulkan') 'Vulkan not selected'
+        Assert ($options.ArgumentList -contains '--skate3_vr_perf_trace=true') 'VR timing trace not enabled'
+        Assert ($options.ArgumentList -contains '--skate3_vr_gpu_timing=true') 'GPU timing not enabled'
+        Assert ($options.ArgumentList -contains '--skate3_native_render_scene_perf_log=true') 'Native timing not enabled'
         Assert ($options.ArgumentList -contains ('--game_data_root="{0}\game"' -f $fixture)) 'Game path lost its quotes'
         Assert ($options.ArgumentList -contains ('--user_data_root="{0}\out\runtime-test"' -f $fixture)) 'User profile changed'
     }

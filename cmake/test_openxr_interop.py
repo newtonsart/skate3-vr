@@ -16,7 +16,8 @@ FILES = ["include/rex/ui/vulkan/instance.h", "src/ui/vulkan/vulkan_instance.cpp"
          "include/rex/ui/vulkan/presenter.h", "src/ui/vulkan/vulkan_presenter.cpp",
          "src/graphics/vulkan/command_processor.cpp",
          "include/rex/ui/overlay/install_wizard_overlay.h",
-         "src/ui/overlay/install_wizard_overlay.cpp", "thirdparty/CMakeLists.txt"]
+         "src/ui/overlay/install_wizard_overlay.cpp", "thirdparty/CMakeLists.txt",
+         "src/ui/rex_app.cpp", "src/core/cvar.cpp"]
 
 
 class InteropTests(unittest.TestCase):
@@ -33,6 +34,8 @@ class InteropTests(unittest.TestCase):
             self.assertEqual(first, [(sdk / name).read_bytes() for name in FILES])
             self.assertIn("FlushNativeForExternal", (sdk / FILES[4]).read_text())
             self.assertIn("hooks.create_instance", (sdk / FILES[1]).read_text())
+            self.assertIn("user_dir = rex::to_path(user_data_cvar)", (sdk / "src/ui/rex_app.cpp").read_text())
+            self.assertIn("leaving it unchanged", (sdk / "src/core/cvar.cpp").read_text())
             self.assertIn('row.label = "VR View"', (sdk / FILES[8]).read_text())
             self.assertIn('"skate3_vr_window_feather"};', (sdk / FILES[8]).read_text())
             self.assertIn('edges.label = "VR Window Edges"', (sdk / FILES[8]).read_text())

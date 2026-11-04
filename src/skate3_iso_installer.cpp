@@ -69,40 +69,6 @@ std::string ToLower(std::string value) {
   return value;
 }
 
-// ISO names are attacker-controlled bytes that end up joined onto the install
-// directory, and on Windows std::filesystem treats '\' as a separator and ':'
-// as a drive letter ("C:x") or NTFS alternate data stream ("a:stream"), so a
-// '/'-only split is not enough. Reject absolute paths, ':' and control bytes,
-// then split on both separators and reject empty components and any made only
-// of dots/spaces (Win32 strips trailing dots and spaces, so "... " or ". ."
-// can collapse to "." / "..").
-bool IsUnsafeIsoPath(std::string_view path) {
-  if (path.empty() || path.starts_with('/') || path.starts_with('\\')) {
-    return true;
-  }
-  for (const char c : path) {
-    if (c == ':' || static_cast<unsigned char>(c) < 0x20) {
-      return true;
-    }
-  }
-  size_t start = 0;
-  while (start <= path.size()) {
-    size_t end = path.find_first_of("/\\", start);
-    if (end == std::string_view::npos) {
-      end = path.size();
-    }
-    auto component = path.substr(start, end - start);
-    if (component.find_first_not_of(". ") == std::string_view::npos) {
-      return true;
-    }
-    if (end == path.size()) {
-      break;
-    }
-    start = end + 1;
-  }
-  return false;
-}
-
 #if defined(_WIN32)
 std::filesystem::path PickIsoFile() {
   wchar_t filename[MAX_PATH] = {};
@@ -312,7 +278,8 @@ class XboxIsoReader {
       }
     }
 
-    if (!std::filesystem::remove(marker, ec) || ec) {
+    std::filesystem::remove(target_root / ".skate3-vr-installing", ec);
+    if (ec || !std::filesystem::remove(marker, ec) || ec) {
       error = "Unable to finalize the game directory.";
       return false;
     }
@@ -404,7 +371,8 @@ class XboxIsoReader {
 
 bool IsGameInstalled(const std::filesystem::path& game_root) {
   std::error_code ec;
-  if (std::filesystem::exists(game_root / std::string(kInstallIncompleteMarker), ec)) {
+  if (std::filesystem::exists(game_root / std::string(kInstallIncompleteMarker), ec) ||
+      std::filesystem::exists(game_root / ".skate3-vr-installing", ec)) {
     REXLOG_WARN("Game files at {} are from an incomplete ISO install; reinstall required",
                 game_root.string());
     return false;

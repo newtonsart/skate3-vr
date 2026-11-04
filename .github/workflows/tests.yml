@@ -27,6 +27,20 @@ jobs:
           python-version: "3.12"
       - name: Run Python tests
         run: python -B -m unittest discover -s tests -p "test_*.py" -v
+      - name: Test ISO extraction
+        run: python -B cmake/test_extract_game_iso.py
+
+  openxr-patch:
+    name: OpenXR SDK patch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -B cmake/test_openxr_interop.py
 
   cpp-windows:
     name: c++ (windows, ${{ matrix.compiler }})

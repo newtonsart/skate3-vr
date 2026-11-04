@@ -78,12 +78,13 @@ its system function. [Controller details and checks](docs/PCVR_CONTROLLERS.md).
 | **Ctrl + F8** | Recenter the view or place the window in front of you. |
 | **Ctrl + F11** | Switch between the three modes while playing. |
 
-Under **RB + Start → Video**, adjust the VR mode, image quality, window size
-and position, camera and HUD. Settings are saved.
+Under the game's **Options → View**, adjust the VR mode, image quality, window
+size and position, camera and HUD. Changes apply immediately and are saved.
+**RB + Start → Video** remains available as an alternative.
 If your PlayStation gamepad does not respond, select **Controls → Controller
 Backend → SDL** and restart. [More about settings and camera](docs/PCVR_SETTINGS.md).
 
-In window modes, select **Video → Move window**. The left stick moves it
+In window modes, select **Options → View → Move window**. The left stick moves it
 left/right and up/down; the right stick moves it closer/farther; **LB/RB** resize
 it. Press **A** to place it or **B** to restore its previous placement.
 With **Quest Touch**, point at the window until a blue marker appears, hold
@@ -93,9 +94,9 @@ distance; the other hand's stick up/down changes size. **A** confirms and **B**
 cancels. Both window modes support this interaction. The window faces you only
 while placing it, except while grabbing. After **A**, its position and orientation
 stay fixed in the room. **B** restores both.
-Use **Video → Face Viewer While Placing** to disable automatic orientation, or **VR Window Depth →
+Use **View → Face Viewer While Placing** to disable automatic orientation, or **VR Window Depth →
 Reduced** for gentler stereo. **Natural** calibrates depth to screen size and game FOV.
-In immersive mode, **Video → Adjust camera** keeps the world visible while
+In immersive mode, **Options → View → Adjust camera** keeps the world visible while
 the left stick changes camera height and the right stick changes distance.
 Press **A** to apply or **B** to cancel. Both editors use a small panel below
 the scene and reserve the gamepad controls until you return to settings.

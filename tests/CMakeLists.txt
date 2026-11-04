@@ -17,10 +17,14 @@ set(SKATE3_TESTS
     file_stamp_test
     hall_of_meat_test
     screen_fx_test
+    safe_file_test
 )
 
 foreach(test_name IN LISTS SKATE3_TESTS)
     add_executable(${test_name} ${test_name}.cpp test_check.h)
+    if(test_name STREQUAL "safe_file_test")
+        target_sources(${test_name} PRIVATE ${PROJECT_SOURCE_DIR}/src/skate3_safe_file.cpp)
+    endif()
     target_include_directories(${test_name} PRIVATE
         ${PROJECT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -34,6 +38,12 @@ foreach(test_name IN LISTS SKATE3_TESTS)
     add_test(NAME ${test_name} COMMAND ${test_name})
     set_tests_properties(${test_name} PROPERTIES LABELS "unit" TIMEOUT 60)
 endforeach()
+
+add_executable(iso_path_test ${PROJECT_SOURCE_DIR}/src/skate3_setup_test.cpp)
+target_include_directories(iso_path_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_features(iso_path_test PRIVATE cxx_std_20)
+add_test(NAME iso_path_test COMMAND iso_path_test)
+list(APPEND SKATE3_TESTS iso_path_test)
 
 # All test executables, so CI and local runs can build them in one step
 # without building the game: cmake --build <dir> --target skate3_tests

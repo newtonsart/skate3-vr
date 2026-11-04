@@ -40,7 +40,9 @@ function Get-VrInstallation {
 
 function Test-VrGameReady {
     param([string]$GameRoot)
-    if (Test-Path -LiteralPath (Join-Path $GameRoot '.skate3-vr-installing')) { return $false }
+    foreach ($marker in @('.skate3-vr-installing', '.skate3_install_incomplete')) {
+        if (Test-Path -LiteralPath (Join-Path $GameRoot $marker)) { return $false }
+    }
     foreach ($name in @('default.xex','data\webkit\EAWebkit.xex','default.xexp','data\webkit\EAWebkit.xexp')) {
         if (-not (Test-Path -LiteralPath (Join-Path $GameRoot $name) -PathType Leaf)) { return $false }
     }
@@ -126,7 +128,7 @@ function Get-VrLaunchOptions {
         ('--user_data_root="{0}"' -f $saveProfile[0].UserRoot),
         ('--log_file="{0}\skate3.log"' -f $saveProfile[0].UserRoot))
     if ($Setup) { $arguments += @('--skate3_setup_only=true','--skate3_vr=false','--fullscreen=false') }
-    else { $arguments += @('--skate3_vr=true',"--skate3_vr_mode=$Mode",'--skate3_native_render_scene_msaa=1','--skate3_vr_share_frame_work=true') }
+    else { $arguments += @('--skate3_vr=true',"--skate3_vr_mode=$Mode",'--skate3_native_render_scene_msaa=1','--skate3_vr_share_frame_work=true','--skate3_vr_perf_trace=true','--skate3_vr_gpu_timing=true','--skate3_native_render_scene_perf_log=true','--skate3_native_render_scene_perf_interval=120') }
     return @{ FilePath = $installation.Executable; WorkingDirectory = $installation.Root; ArgumentList = $arguments }
 }
 

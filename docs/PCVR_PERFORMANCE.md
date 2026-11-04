@@ -1,5 +1,27 @@
 # PCVR shared frame-work optimization
 
+## Gameplay trace
+
+The VR launcher enables lightweight diagnostics in the selected save profile's
+`skate3.log`. During stereo gameplay, `VR trace:` summarizes 120 submitted
+frames: the OpenXR display period, mean and maximum CPU submission interval,
+intervals over 1.5 times that period, repeated scene generations, cumulative
+game-camera yaw, and the maximum CPU render, transfer/wait and GPU render
+times, plus the maximum time spent polling XR events and beginning a frame.
+`native-scene perf:` provides the game-thread and resource-work breakdown.
+`VR trace worst interval:` records the scene, camera yaw change and timings for
+the submission with the largest interval in that window. The interval spans
+two submissions and is not necessarily caused by work in the latter frame.
+The trace includes
+timing queries but adds no new GPU completion waits; it may still add overhead.
+
+Submission intervals do not measure displayed frames, reprojection or headset
+latency. GPU timing may be unavailable, indicated by `GPU-samples=0` and a
+maximum of -1. Camera yaw is inferred from the game projection, not head
+movement, and can be unavailable for unusual projections. These records contain
+performance and scene statistics, not captured images or audio. Launching
+directly without the VR launcher leaves tracing disabled by default.
+
 2026-11-02, RTX 4080, Windows RelWithDebInfo Vulkan build.
 
 ## Changes

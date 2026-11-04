@@ -50,6 +50,7 @@ var
 function HasGame(const Folder: String): Boolean;
 begin
   Result := not FileExists(AddBackslash(Folder) + '.skate3-vr-installing') and
+    not FileExists(AddBackslash(Folder) + '.skate3_install_incomplete') and
     FileExists(AddBackslash(Folder) + 'default.xex') and
     FileExists(AddBackslash(Folder) + 'data\webkit\EAWebkit.xex');
 end;
@@ -122,7 +123,8 @@ begin
     ContainsFolder(S, A) or ContainsFolder(G, S) or ContainsFolder(S, G) then begin
     Result := 'Choose separate folders for the application, game files and saves.'; Exit;
   end;
-  if IsNonempty(G) and not HasGame(G) and not FileExists(AddBackslash(G) + '.skate3-vr-installing') then
+  if IsNonempty(G) and not HasGame(G) and not FileExists(AddBackslash(G) + '.skate3-vr-installing') and
+    not FileExists(AddBackslash(G) + '.skate3_install_incomplete') then
     Result := 'The game folder is not empty and is not an existing installation. Choose an empty folder to avoid overwriting files.';
 end;
 

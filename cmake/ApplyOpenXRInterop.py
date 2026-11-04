@@ -15,6 +15,18 @@ def apply(sdk):
             raise ValueError(f"Pinned SDK patch anchor mismatch: {name}: {old[:65]}")
         path.write_text(text.replace(old, new), encoding="utf-8")
 
+    for variable in ("game_dir", "user_dir", "update_dir", "cache_dir"):
+        edit("src/ui/rex_app.cpp", f"{variable} = *config_value;",
+             f"{variable} = rex::to_path(*config_value);")
+    for variable, value in (("game_dir", "game_data_cvar"), ("user_dir", "user_data_cvar"),
+                            ("update_dir", "update_data_cvar"), ("cache_dir", "cache_root_cvar"),
+                            ("metadata_dir", "metadata_root_cvar")):
+        edit("src/ui/rex_app.cpp", f"{variable} = {value};",
+             f"{variable} = rex::to_path({value});")
+    edit("src/core/cvar.cpp",
+         'REXLOG_WARN("SaveConfigValues: existing config {} is malformed ({}), rewriting it",\n                    config_path.string(), err.description());',
+         'REXLOG_ERROR("SaveConfigValues: cannot read or parse config {}; leaving it unchanged: {}",\n                     config_path.string(), err.description());\n        return;')
+
     edit("thirdparty/CMakeLists.txt",
          'if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${submodule}/.git")',
          'file(GLOB submodule_files "${CMAKE_CURRENT_SOURCE_DIR}/${submodule}/*")\n    if(NOT submodule_files)')

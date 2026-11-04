@@ -63,6 +63,7 @@
 #include <rex/kernel/xam/module.h>
 #include <rex/logging.h>
 #include <rex/platform.h>
+#include <rex/system.h>
 #include <rex/perf/counter.h>
 #include <rex/ppc/context.h>
 #include <rex/system/function_dispatcher.h>
@@ -612,6 +613,12 @@ std::optional<rex::PathConfig> Skate3BaseApp::OnFinalizePaths(
   profiles_path_ = skate3::ProfilesFilePath(defaults.user_data_root);
 
   auto profiles = skate3::LoadProfiles(profiles_path_);
+  if (profiles.save_blocked) {
+    rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error,
+        "The player profiles could not be read or backed up. The game will close to protect your saves. Check the profile file and try again.");
+    app_context().QuitFromUIThread();
+    return std::nullopt;
+  }
   // After LoadProfiles: a file that didn't parse has been moved aside by now.
   // An unreadable file sets profiles.save_blocked, so SaveProfiles below
   // can't replace it either way.
@@ -914,6 +921,9 @@ void Skate3BaseApp::OnPostSetup() {
       if (!gate->open.load(std::memory_order_relaxed)) {
         return;  // UI thread: after OnShutdown, never recreate the dialog
       }
+#if SKATE3_HAS_OPENXR
+      vr_editor_from_options_ = rex::cvar::Query<int32_t>("skate3_vr_edit_mode") != 0;
+#endif
       if (!simple_settings_dialog_ || !simple_settings_dialog_->visible()) {
         ToggleSimpleSettings();
       }
@@ -1085,6 +1095,7 @@ void Skate3BaseApp::ToggleSimpleSettings() {
   // Fires on every Hide (B/Esc, Close Settings, Close Game), the one spot
   // that reliably sees the menu close regardless of who initiated it.
   auto close_settings = [this]() {
+    vr_editor_from_options_ = false;
 #if SKATE3_HAS_OPENXR
     skate3::vr::CancelVrEditor();
     skate3::vr::SetGameVrSettingsVisible(false);
@@ -1128,6 +1139,16 @@ void Skate3BaseApp::ToggleSimpleSettings() {
   simple_settings_dialog_->SetLiveEditor([this](ImGuiIO& io) {
     auto* rt=runtime();
     auto* input=rt ? static_cast<rex::input::InputSystem*>(rt->input_system()) : nullptr;
+    if (vr_editor_from_options_ && rex::cvar::Query<int32_t>("skate3_vr_edit_mode") == 0) {
+      rex::input::X_INPUT_GAMEPAD pad{};
+      if (input) input->GetUiGamepadState(&pad);
+      // Release confirmation before returning control to the native menu.
+      if (!(pad.buttons & (rex::input::X_INPUT_GAMEPAD_A | rex::input::X_INPUT_GAMEPAD_B)) &&
+          !ImGui::IsKeyDown(ImGuiKey_Enter) && !ImGui::IsKeyDown(ImGuiKey_Escape)) {
+        simple_settings_dialog_->Hide();
+      }
+      return true;
+    }
     return skate3::vr::DrawVrEditor(io,input,user_settings_path_);
   });
 #endif

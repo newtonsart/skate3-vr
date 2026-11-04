@@ -1,6 +1,7 @@
 #include "stereo_math.h"
 #include "cull_frustum.h"
 #include "gpu_timing.h"
+#include "perf_trace.h"
 #include "openxr_passthrough.h"
 #include "presentation.h"
 #include "render_resolution.h"
@@ -17,6 +18,21 @@
 
 void Check(bool condition) { if(!condition) throw std::runtime_error("Stereo matrix check failed"); }
 int main() {
+  {
+    skate3::vr::PerfTrace trace;
+    float vp[16]{}, proj[16]{};
+    proj[11]=1; vp[11]=1;
+    trace.Add(0,11,2,3,4,-1,1,vp,proj);
+    vp[3]=1; vp[11]=0;
+    trace.Add(22,11,5,7,9,4,1,vp,proj);
+    Check(trace.frames==2 && trace.intervals==1 && trace.slow==1 && trace.repeated==1);
+    Check(trace.interval_max==22 && trace.render_max==5 && trace.wait_max==7 && trace.xr_wait_max==9 && trace.gpu_max==4 && trace.gpu_samples==1);
+    Check(trace.worst_scene==1 && trace.worst_render==5 && trace.worst_wait==7 && trace.worst_xr_wait==9 && trace.worst_gpu==4 && std::abs(trace.worst_yaw_delta-3.14159265358979323846/2)<1e-6);
+    Check(std::abs(trace.yaw_travel-3.14159265358979323846/2)<1e-6);
+    trace.ResetWindow();
+    trace.Add(11,11,1,1,1,0,2,vp,proj);
+    Check(trace.frames==1 && trace.slow==0 && trace.repeated==0 && trace.yaw_travel==0);
+  }
   using namespace skate3::vr;
   {
   const float full_hud[4]={1,1,0,0};

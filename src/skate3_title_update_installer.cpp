@@ -1,4 +1,5 @@
 #include "skate3_title_update_installer.h"
+#include "skate3_safe_file.h"
 
 #include <algorithm>
 #include <array>
@@ -128,14 +129,8 @@ bool StagePayload(const TitleUpdatePayload& payload, const std::vector<uint8_t>&
     error = "Unable to create " + target.parent_path().string() + ".";
     return false;
   }
-  std::ofstream out(target, std::ios::binary | std::ios::trunc);
-  if (!out) {
-    error = "Unable to create " + target.string() + ".";
-    return false;
-  }
-  out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-  if (!out) {
-    error = "Failed to write " + target.string() + ".";
+  if (!safe_file::WriteFileAtomic(target,
+          std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), &error)) {
     return false;
   }
   REXLOG_INFO("Staged Skate 3 title update payload {}", target.string());
@@ -713,7 +708,7 @@ bool StageTitleUpdateFromFile(const std::filesystem::path& source,
     if (!package.ListEntries(entries, error)) {
       return false;
     }
-    size_t staged_count = 0;
+    std::vector<std::vector<uint8_t>> verified;
     for (const auto& payload : kPayloads) {
       const auto wanted = ToLowerCopy(std::string(payload.container_path));
       const auto it = std::find_if(entries.begin(), entries.end(), [&](const auto& entry) {
@@ -735,12 +730,12 @@ bool StageTitleUpdateFromFile(const std::filesystem::path& source,
                 "; this build requires Title Update 3 (3.0.3.0).";
         return false;
       }
-      if (!StagePayload(payload, file_data, game_root, error)) {
-        return false;
-      }
-      ++staged_count;
+      verified.push_back(std::move(file_data));
     }
-    return staged_count == kPayloads.size();
+    for (size_t i = 0; i < kPayloads.size(); ++i) {
+      if (!StagePayload(kPayloads[i], verified[i], game_root, error)) return false;
+    }
+    return true;
   }
 
   // Not an STFS container; accept a raw xexp payload that matches one of the
