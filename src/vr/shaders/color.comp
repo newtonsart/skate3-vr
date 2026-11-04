@@ -1,0 +1,45 @@
+#version 450
+layout(local_size_x=16,local_size_y=16) in;
+layout(set=0,binding=0) uniform sampler2D gameImage;
+layout(set=0,binding=1,rgba8) writeonly uniform image2D eyeImage;
+layout(push_constant) uniform ColorParameters {
+    uint decodeColor;
+    float feather;
+    float aspect;
+    float padding;
+    float pointerU;
+    float pointerV;
+    uint pointerMode;
+    float pointerPadding;
+} parameters;
+void main() {
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size=imageSize(eyeImage);
+    if(any(greaterThanEqual(p,size))) return;
+    vec2 uv=(vec2(p)+0.5)/vec2(size);
+    vec4 color=texture(gameImage,uv);
+    // Guest output already contains display-encoded color. OpenXR UNORM
+    // swapchains require linear color; decode exactly once before composition.
+    if(parameters.decodeColor!=0) {
+        vec3 low=color.rgb/12.92;
+        vec3 high=pow((max(color.rgb,vec3(0))+0.055)/1.055,vec3(2.4));
+        color.rgb=mix(high,low,lessThanEqual(color.rgb,vec3(0.04045)));
+    }
+    if(parameters.pointerMode!=0) {
+        vec2 offset=(uv-vec2(parameters.pointerU,parameters.pointerV))*vec2(parameters.aspect,1);
+        float ring=abs(length(offset)-0.008);
+        float pixel=1.0/float(size.y);
+        float mask=1-smoothstep(pixel,pixel*2,ring);
+        vec3 tint=parameters.pointerMode==2 ? vec3(0.1,1,0.3) : vec3(0.1,0.7,1);
+        color.rgb=mix(color.rgb,tint,mask);
+    }
+    if(parameters.feather>0) {
+        // Measure in panel-height units, independently of the eye texture's aspect.
+        vec2 distanceToEdge=min(uv,1-uv)*vec2(parameters.aspect,1);
+        vec2 fade=smoothstep(vec2(0),vec2(parameters.feather),distanceToEdge);
+        float alpha=fade.x*fade.y;
+        // OpenXR expects premultiplied linear color. Ignore the guest's internal alpha.
+        color=vec4(color.rgb*alpha,alpha);
+    }
+    imageStore(eyeImage,p,color);
+}

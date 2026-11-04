@@ -28,6 +28,7 @@ class Skate3BaseApp : public rex::ReXApp {
   ~Skate3BaseApp() override;
 
  protected:
+  void OnPreSetup(rex::RuntimeConfig& config) override;
   std::optional<rex::PathConfig> OnFinalizePaths(
       const rex::PathConfig& defaults,
       std::function<void(rex::PathConfig)> resume) override;

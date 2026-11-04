@@ -644,6 +644,8 @@ void OnSkaterPhotoStepDone(uint32_t result);
 // True while the photo display-card quad is in the live 2D stream during an
 // armed photo flow; the compose auto-trace trigger keys on it.
 bool PhotoCardVisible();
+// The screenshot/editor/card flow must retain the original game camera in VR.
+bool PhotoPresentationActive();
 void OnMovieDecode();
 void OnMovieFrame(uint8_t* base, uint32_t renderer);
 

@@ -12,6 +12,9 @@ if(SKATE3_STATIC_MSVC_RUNTIME)
 endif()
 
 project(skate3 VERSION 2.1.0 LANGUAGES CXX)
+add_executable(skate3-movie-skip-test EXCLUDE_FROM_ALL src/skate3_movie_skip_test.cpp)
+add_executable(skate3-setup-test EXCLUDE_FROM_ALL src/skate3_setup_test.cpp)
+target_compile_features(skate3-setup-test PRIVATE cxx_std_20)
 
 if(WIN32)
     enable_language(RC)
@@ -327,8 +330,21 @@ if(WIN32)
     set(REXGLUE_RUNTIME_RC_COPYRIGHT "(c) Skate3Recomp contributors")
 endif()
 
+option(SKATE3_ENABLE_OPENXR "Build experimental native OpenXR stereo integration" OFF)
+if(SKATE3_ENABLE_OPENXR)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ApplyOpenXRInterop.py")
+    execute_process(COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ApplyOpenXRInterop.py" "${REXSDK_DIR}"
+        COMMAND_ERROR_IS_FATAL ANY)
+endif()
 include(cmake/RexGlue.cmake)
 include(cmake/CodegenTargets.cmake)
+
+option(SKATE3_BUILD_OPENXR_PROBE "Build native OpenXR runtime diagnostics" OFF)
+if(SKATE3_BUILD_OPENXR_PROBE OR SKATE3_ENABLE_OPENXR)
+    add_subdirectory(src/vr)
+endif()
 
 set(SKATE3_COMMON_SOURCES
     src/exception_compat.cpp
@@ -391,6 +407,29 @@ target_include_directories(skate3 PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/include
     ${REXSDK_DIR}/thirdparty/xxHash
 )
+if(SKATE3_ENABLE_OPENXR)
+    target_sources(skate3 PRIVATE src/vr/game_vr.cpp src/vr/stereo_math.cpp src/vr/settings_surface.cpp src/vr/editor.cpp src/vr/controller_driver.cpp)
+    find_program(SKATE3_GLSLANG NAMES glslangValidator
+        HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
+    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/include/vr_color_spirv.h"
+        COMMAND "${SKATE3_GLSLANG}" -V --target-env vulkan1.1
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/vr/shaders/color.comp"
+            -o "${CMAKE_CURRENT_BINARY_DIR}/vr_color.spv"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedSpirv.py"
+            "${CMAKE_CURRENT_BINARY_DIR}/vr_color.spv"
+            "${CMAKE_CURRENT_BINARY_DIR}/include/vr_color_spirv.h"
+        DEPENDS src/vr/shaders/color.comp cmake/EmbedSpirv.py VERBATIM)
+    target_sources(skate3 PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include/vr_color_spirv.h")
+    add_executable(skate3-vr-color-test EXCLUDE_FROM_ALL src/vr/color_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/include/vr_color_spirv.h")
+    target_include_directories(skate3-vr-color-test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include")
+    target_link_libraries(skate3-vr-color-test PRIVATE skate3_openxr)
+    set_source_files_properties(src/vr/game_vr.cpp src/vr/settings_surface.cpp PROPERTIES
+        INCLUDE_DIRECTORIES "${REXSDK_DIR}/thirdparty/renderdoc")
+    target_link_libraries(skate3 PRIVATE skate3_openxr)
+    target_compile_definitions(skate3 PRIVATE SKATE3_HAS_OPENXR=1)
+    add_executable(skate3-controller-driver-test EXCLUDE_FROM_ALL src/vr/controller_driver.cpp src/vr/controller_driver_test.cpp)
+    target_link_libraries(skate3-controller-driver-test PRIVATE rex::runtime)
+endif()
 
 set(SKATE3_NATIVE_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/native/shaders/scene.hlsl

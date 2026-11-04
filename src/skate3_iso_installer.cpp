@@ -1,4 +1,7 @@
 #include "skate3_iso_installer.h"
+#include "skate3_iso_path.h"
+#include <rex/cvar.h>
+#include <rex/filesystem.h>
 
 #include <algorithm>
 #include <array>
@@ -219,8 +222,8 @@ class XboxIsoReader {
       return false;
     }
 
-    if (!HasFile(kDefaultXex)) {
-      error = "The ISO does not contain default.xex.";
+    if (!HasFile(kDefaultXex) || !HasFile("data/webkit/EAWebkit.xex")) {
+      error = "The ISO does not contain the required Skate 3 executables.";
       return false;
     }
 
@@ -250,7 +253,6 @@ class XboxIsoReader {
       error = "Unable to create the game directory.";
       return false;
     }
-
     // Validate every path before writing anything, so a bad entry late in the
     // ISO does not leave a half-extracted tree behind.
     for (const auto& entry : entries_) {
@@ -407,7 +409,8 @@ bool IsGameInstalled(const std::filesystem::path& game_root) {
                 game_root.string());
     return false;
   }
-  return std::filesystem::is_regular_file(game_root / std::string(kDefaultXex), ec);
+  return std::filesystem::is_regular_file(game_root / std::string(kDefaultXex), ec) &&
+         std::filesystem::is_regular_file(game_root / "data/webkit/EAWebkit.xex", ec);
 }
 
 void ShowRexglueIsoInstallWizard(rex::ui::ImGuiDrawer* drawer, rex::PathConfig runtime_paths,
@@ -436,7 +439,7 @@ void ShowRexglueIsoInstallWizard(rex::ui::ImGuiDrawer* drawer, rex::PathConfig r
     return true;
   };
 
-  new rex::ui::InstallWizardDialog(
+  auto* wizard = new rex::ui::InstallWizardDialog(
       drawer, "Setup", "Game Files",
       "Skate 3 game files were not found. Select your Xbox 360 ISO to install them.",
       game_root.string(), std::move(pick_source), std::move(install),
@@ -445,6 +448,11 @@ void ShowRexglueIsoInstallWizard(rex::ui::ImGuiDrawer* drawer, rex::PathConfig r
           complete(std::move(runtime_paths));
         }
       });
+#if SKATE3_HAS_OPENXR
+  const auto iso=rex::cvar::Query<std::string>("skate3_install_iso");
+  const bool setup=rex::cvar::Query<bool>("skate3_setup_only");
+  if (setup || !iso.empty()) wizard->BeginInstall(rex::to_path(iso),setup);
+#endif
 }
 
 bool RunRexglueIsoInstallWizardBlocking(rex::ui::WindowedAppContext& app_context,

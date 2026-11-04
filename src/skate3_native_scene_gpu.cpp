@@ -7,6 +7,10 @@
 #include "skate3_native_scene.h"
 
 #include "generated/skate3_init.h"
+#include <rex/runtime.h>
+#if SKATE3_HAS_OPENXR
+#include "vr/hud_clip.h"
+#endif
 
 #include <array>
 #include <atomic>
@@ -60,6 +64,11 @@
 #endif
 #include "skate3_native_scene_state.h"
 #include "skate3_native_scene_gpu_internal.h"
+#if SKATE3_HAS_OPENXR
+#include "vr/game_vr.h"
+#include "vr/hud_backdrop.h"
+#include "vr/presentation.h"
+#endif
 
 // Cvars defined in skate3_native_scene.cpp (and SDK cvars re-declared there).
 REXCVAR_DECLARE(bool, async_shader_compilation);
@@ -4143,10 +4152,15 @@ bool EnsureShadowResources(const NativeGuestOutputRenderContext& context) {
   // any device-limit clamping the texture cache applied, and gives the same
   // effective shadow raster the emulated GPU renders at that scale.
   const int32_t tile_cfg = REXCVAR_GET(skate3_native_render_scene_shadow_tile);
+  uint32_t shadow_height=context.guest_output_height;
+#if SKATE3_HAS_OPENXR
+  // Eye raster quality must not silently quadruple the auto shadow atlas.
+  shadow_height=skate3::vr::GameVrShadowReferenceHeight(shadow_height);
+#endif
   const uint32_t want_tile =
       tile_cfg > 0
           ? uint32_t(tile_cfg)
-          : std::min(512u * std::max(1u, (context.guest_output_height + 719u) /
+          : std::min(512u * std::max(1u, (shadow_height + 719u) /
                                              720u),
                      4096u);
   if (g_r.shadow_raw != nullptr && g_r.shadow_tile != want_tile) {
@@ -6338,15 +6352,20 @@ bool GrabTargetValid(uint8_t* base) {
 // of the decode path's run-copy untiler: at 32bpp a 4-texel-aligned x-run of
 // 4 maps to contiguous tiled bytes (same proof as the untiler's run_blocks =
 // 16 >> bpb_log2), so one GetTiledOffset2D per 4 texels. 1152x640 = 184k
-// offset computations, well under a millisecond.
+// offset computations. Stage the mapped source first: scalar reads of an
+// uncached Vulkan mapping can stall the render thread for tens of ms.
 bool WriteGrabToGuest(uint8_t* base, const uint8_t* src) {
   constexpr uint32_t kW = RendererState::kBlurWidth;
   constexpr uint32_t kH = RendererState::kBlurHeight;
-  static thread_local std::vector<uint8_t> staging;
+  const auto copy_start = PerfClock::now();
+  static thread_local std::vector<uint8_t> staging, cached_source;
   staging.resize(size_t(kW) * kH * 4);
+  cached_source.resize(size_t(RendererState::kGrabRowPitch) * kH);
+  std::memcpy(cached_source.data(), src, cached_source.size());
+  const auto tile_start = PerfClock::now();
   for (uint32_t y = 0; y < kH; ++y) {
     const uint32_t* row = reinterpret_cast<const uint32_t*>(
-        src + size_t(y) * RendererState::kGrabRowPitch);
+        cached_source.data() + size_t(y) * RendererState::kGrabRowPitch);
     for (uint32_t x = 0; x < kW; x += 4) {
       const uint32_t off = uint32_t(rex::graphics::texture_util::GetTiledOffset2D(
           int32_t(x), int32_t(y), kW, 2));
@@ -6360,7 +6379,20 @@ bool WriteGrabToGuest(uint8_t* base, const uint8_t* src) {
       }
     }
   }
-  return GuestTryCopy(base + kGrabGuestView, staging.data(), staging.size());
+  const auto guest_start = PerfClock::now();
+  if (auto* runtime = rex::Runtime::instance(); runtime && runtime->virtual_membase() == base) {
+    // Invalidate the whole image once rather than faulting on each watched page.
+    runtime->memory()->TriggerPhysicalMemoryCallbacks(
+        rex::thread::global_critical_region::AcquireDirect(), kGrabGuestView,
+        uint32_t(staging.size()), true, true);
+  }
+  const bool wrote = GuestTryCopy(base + kGrabGuestView, staging.data(), staging.size());
+  if (g_r.grab_writes % 120 == 0) {
+    const auto micros = [](auto elapsed) { return std::chrono::duration<double,std::micro>(elapsed).count(); };
+    REXLOG_INFO("native-scene: photo grab CPU us: mapped-copy={:.0f} tile={:.0f} guest-copy={:.0f}",
+        micros(tile_start-copy_start), micros(guest_start-tile_start), micros(PerfClock::now()-guest_start));
+  }
+  return wrote;
 }
 
 // The photo-grab window (see skate3_native_render_scene_photo_readback /
@@ -8436,7 +8468,11 @@ void AddGuestOcclSkipped(uint32_t n) {
 
 namespace {
 
-bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_data*/) {
+bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data) {
+  bool second_vr_eye = false;
+#if SKATE3_HAS_OPENXR
+  second_vr_eye = user_data && static_cast<skate3::vr::EyeCamera*>(user_data)->eye_index == 1;
+#endif
   if (!SceneEnabled() ||
       (context.backend != NativeGuestOutputBackend::kD3D12 &&
        context.backend != NativeGuestOutputBackend::kVulkan)) {
@@ -8541,6 +8577,28 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
     }
     scene_ptr = g_scene;
   }
+  FrameScene eye_scene;
+#if SKATE3_HAS_OPENXR
+  if (user_data && loading_native)
+    static_cast<skate3::vr::EyeCamera*>(user_data)->override_camera = false;
+  if (auto* eye = static_cast<skate3::vr::EyeCamera*>(user_data);
+      eye && eye->override_camera && !loading_native) {
+    const auto copy_start=PerfClock::now();
+    FrameScene* camera_scene=eye->render_scene.get();
+    if (!camera_scene) {
+      eye_scene = *eye->scene;
+      camera_scene=&eye_scene;
+    }
+    eye->scene_copy_ms=std::chrono::duration<double,std::milli>(PerfClock::now()-copy_start).count();
+    std::memcpy(camera_scene->view_proj, eye->view_proj, sizeof(camera_scene->view_proj));
+    std::memcpy(camera_scene->proj, eye->proj, sizeof(camera_scene->proj));
+    std::memcpy(camera_scene->cam_pos, eye->position, sizeof(camera_scene->cam_pos));
+    if (rex::cvar::Query<int32_t>("skate3_vr_edit_mode")!=0)
+      camera_scene->ui_blur=0;
+    scene_ptr = eye->render_scene ? eye->render_scene :
+        std::shared_ptr<const FrameScene>(&eye_scene, [](const FrameScene*) {});
+  }
+#endif
   const FrameScene& scene = *scene_ptr;
 
   if (!EnsurePipeline(context)) {
@@ -8600,7 +8658,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
 
   // Reset this frame's bone ring region (shared by the shadow casters and
   // the main pass: the shadow pass allocates first, the main pass appends).
-  const uint64_t frame_number = g_frames_rendered.load(std::memory_order_relaxed);
+  const uint64_t frame_number = g_frames_rendered.load(std::memory_order_relaxed) - (second_vr_eye ? 1 : 0);
   const uint32_t bone_slot = g_r.bone_regions.Region(context.device, frame_number);
   const uint32_t bone_region = bone_slot * RendererState::kBoneRegionSize;
   // A neutral b2 block prevents ordinary draws from inheriting body opacity.
@@ -8646,7 +8704,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
   // The takeover gates judge REAL scenes only; a native loading frame
   // renders its empty scene deliberately (the gates re-run as usual once
   // the presence context flips back to gameplay).
-  if (warmup_ms > 0 && !loading_native &&
+  if (!second_vr_eye && warmup_ms > 0 && !loading_native &&
       REXCVAR_GET(skate3_native_render_scene_debug) == 0) {
     if (g_warmup_armed.load(std::memory_order_relaxed)) {
       const bool small_or_stale =
@@ -8740,27 +8798,45 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
   EnsurePrewarmWorkers();
   // Native loading frames take the loading-screen commit budget; the heavy
   // decode lifting behind the load is unchanged from the yielded path.
-  PrewarmCommit(context, frame_number, /*loading=*/loading_native);
+  // Keep the resident resource set stable between eyes of one stereo frame.
+  if (!second_vr_eye) PrewarmCommit(context, frame_number, /*loading=*/loading_native);
   // Content-store LRU: superseded words states (old mip levels, pre-demote
   // detail sets, one-shot UI art) age out once nothing routes to them; the
   // mesh cache ages out streamed-out arenas the same way.
-  UpdateEvictFpsEstimate(frame_number);
-  EvictTexStore(frame_number, context.device->CurrentSubmission());
-  PruneTexRouting(frame_number);
-  EvictMeshStore(frame_number);
-  EvictCubeStore(frame_number, context.device->CurrentSubmission());
+  if (!second_vr_eye) {
+    UpdateEvictFpsEstimate(frame_number);
+    EvictTexStore(frame_number, context.device->CurrentSubmission());
+    PruneTexRouting(frame_number);
+    EvictMeshStore(frame_number);
+    EvictCubeStore(frame_number, context.device->CurrentSubmission());
+  }
 
   bool shadow_ready = false;
   uint32_t shadow_draws = 0;
   const auto shadow_t0 = PerfClock::now();
   const float* sh = scene.shadow_rows;
   const int32_t debug_mode = REXCVAR_GET(skate3_native_render_scene_debug);
-  cmd->ProfileRegion(nrhi::ProfileStage::kShadow);
-  shadow_ready =
-      RenderShadowAtlas(context, scene, bone_region, debug_mode, frame_number,
-                        &shadow_draws);
-  cmd->ProfileRegion(nrhi::ProfileStage::kStaticSun);
-  RenderStaticSunMap(context, scene, bone_region, debug_mode, frame_number);
+  bool reuse_shadows=false;
+  const FrameScene* shadow_scene=&scene;
+#if SKATE3_HAS_OPENXR
+  auto* vr_eye=static_cast<skate3::vr::EyeCamera*>(user_data);
+  if (vr_eye && vr_eye->override_camera && vr_eye->shadows) {
+    shadow_scene=vr_eye->scene.get();
+    reuse_shadows=second_vr_eye && vr_eye->shadows->built;
+    if (reuse_shadows) shadow_ready=vr_eye->shadows->ready;
+  }
+#endif
+  if (!reuse_shadows) {
+    cmd->ProfileRegion(nrhi::ProfileStage::kShadow);
+    shadow_ready =
+        RenderShadowAtlas(context, *shadow_scene, bone_region, debug_mode, frame_number, &shadow_draws);
+    cmd->ProfileRegion(nrhi::ProfileStage::kStaticSun);
+    RenderStaticSunMap(context, *shadow_scene, bone_region, debug_mode, frame_number);
+#if SKATE3_HAS_OPENXR
+    if (vr_eye && vr_eye->override_camera && vr_eye->shadows)
+      *vr_eye->shadows={true,shadow_ready};
+#endif
+  }
   g_pw_shadow.Add(perf_ns_since(shadow_t0));
   cmd->ProfileRegion(nrhi::ProfileStage::kMain);
   // Scene-level flicker probe: the shadow cascade rows (or validity/readiness)
@@ -9266,6 +9342,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
         item.ropa && REXCVAR_GET(skate3_native_render_scene_ropa_inline);
     const bool dynamic_payload = item.skinned || item.cloth_quads || item.ropa;
     auto it = g_r.meshes.find(item.mesh);
+    if (second_vr_eye && it == g_r.meshes.end()) return;
     if (item.retained &&
         (it == g_r.meshes.end() || it->second.fingerprint != item.fingerprint)) {
       // Retained off-screen items (edge-of-view guard band) outlive their
@@ -12580,9 +12657,27 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
       scene_2d = g_scene_2d;
     }
     if (!scene_2d.empty()) {
+#if SKATE3_HAS_OPENXR
+      int loading_backdrop=-1;
+      if(user_data) {
+        const auto& eye=*static_cast<skate3::vr::EyeCamera*>(user_data);
+        if(eye.override_camera && eye.clear_hud_backdrop) {
+          std::vector<skate3::vr::HudQuad> quads; quads.reserve(scene_2d.size());
+          for(const auto& draw:scene_2d) quads.push_back(skate3::vr::DescribeHudQuad(draw.flags,draw.src_stride,draw.fetch[2],draw.consts,draw.verts,draw.count,draw.stride));
+          loading_backdrop=skate3::vr::LoadingBackdrop(quads);
+          if(loading_backdrop>=0) {
+            static std::atomic<uint32_t> removed{0};
+            if(removed.fetch_add(1)==0) REXLOG_INFO("VR: removed captured loading fill; spinner tiles preserved");
+          }
+        }
+      }
+#endif
       cmd->SetPipeline(g_r.pso_2d);
       // One shared draw routine for both the RTT passes and the screen pass.
       // ui_region/ui_offset continue after the spline pass's allocations.
+#if SKATE3_HAS_OPENXR
+      uint32_t vr_ui_logged=0;
+#endif
       // yuv != nullptr redirects this draw to the FMV combine: pso_yuv2d
       // with the three movie plane views on params 1/2/5 (t0/t1/t4), the
       // quad's own geometry/transform (so windowed movies place exactly).
@@ -12611,6 +12706,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
           srv_view = t->srv;
         }
         float constants[40];
+        auto draw_scissor=scissor;
         std::memcpy(constants, d.consts, sizeof(d.consts));
         // Wide output: scale the staged projection's clip.x row (the VS
         // computes clip.x = dot(wp, c0)) so the 16:9-authored stream lands
@@ -12626,6 +12722,33 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
         // the former only.
         const bool ortho = d.consts[12] == 0.0f && d.consts[13] == 0.0f &&
                            d.consts[14] == 0.0f && d.consts[15] == 1.0f;
+#if SKATE3_HAS_OPENXR
+        if(user_data && static_cast<skate3::vr::EyeCamera*>(user_data)->capture_ui && vr_ui_logged++<48) {
+          const auto shape=skate3::vr::DescribeHudQuad(d.flags,d.src_stride,d.fetch[2],d.consts,d.verts,d.count,d.stride);
+          REXLOG_INFO("VR UI capture: flags={:X} source-stride={} vertices={} texture={}x{} ortho={} color={:.3f},{:.3f},{:.3f},{:.3f} bounds={:.3f},{:.3f},{:.3f},{:.3f}",
+              d.flags,d.src_stride,d.count,(d.fetch[2]&8191)+1,((d.fetch[2]>>13)&8191)+1,ortho,
+              d.consts[32],d.consts[33],d.consts[34],d.consts[35],
+              shape.left,shape.bottom,shape.right,shape.top);
+        }
+        if (ortho && user_data) {
+          const auto& eye = *static_cast<skate3::vr::EyeCamera*>(user_data);
+          const bool backdrop=skate3::vr::FullscreenHudBackdrop(skate3::vr::DescribeHudQuad(
+              d.flags,d.src_stride,d.fetch[2],d.consts,d.verts,d.count,d.stride));
+          // Screen dim/fade fills belong over the whole view, not inside the readable HUD panel.
+          if(eye.override_camera && backdrop && wide_2d_scale!=1.0f)
+            for(int k=0;k<4;++k) constants[k]/=wide_2d_scale;
+          if (eye.override_camera && !backdrop) {
+            for (int k=0;k<4;++k) {
+              constants[k] = constants[k]*eye.hud_transform[0] + constants[12+k]*eye.hud_transform[2];
+              constants[4+k] = constants[4+k]*eye.hud_transform[1] + constants[12+k]*eye.hud_transform[3];
+            }
+            // Shrinking the HUD must not reveal UI parked outside the original screen.
+            const auto clip=skate3::vr::HudPanelClip(context.guest_output_width,context.guest_output_height,
+                eye.hud_transform,wide_2d_scale);
+            draw_scissor={clip.left,clip.top,clip.right,clip.bottom};
+          }
+        }
+#endif
         constants[36] = ortho ? 1.0f : 0.0f;
         // m[9].y: sharp-magnification amount for APT cached-bitmap tiles
         // (see the cvar; the shader gates on actual fetch magnification).
@@ -12640,6 +12763,8 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
         // edge-to-edge loading quads.
         constants[38] = wide_2d_scale != 1.0f ? wide_2d_scale : 0.0f;
         constants[39] = 0.0f;
+        if(draw_scissor.right<=draw_scissor.left || draw_scissor.bottom<=draw_scissor.top) return;
+        cmd->SetScissor(draw_scissor);
         cmd->SetRootConstants(0, 40, constants, 0);
         cmd->SetTexture(1, srv_view);
         if (yuv != nullptr) {
@@ -12739,6 +12864,9 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
       };
       bool movie_drawn = false;
       for (const Draw2d& d : scene_2d) {
+#if SKATE3_HAS_OPENXR
+        if(loading_backdrop>=0 && &d==&scene_2d[size_t(loading_backdrop)]) continue;
+#endif
         nrhi::TextureView* const* yuv = nullptr;
         // Video-quad detection runs regardless of movie_sub: a quad whose
         // own fetch slots form a YUV triple must NEVER draw through ps_main
@@ -12835,6 +12963,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* /*user_dat
         emit_draw(d, yuv);
         movie_drawn |= yuv != nullptr;
       }
+      cmd->SetScissor(scissor);
       if (movie_drawn) {
         g_movie_native_last_ns.store(movie_now_ns, std::memory_order_relaxed);
       }
@@ -12896,11 +13025,43 @@ void Install() {
   // Registered even when the scene cvar starts off: RenderScene yields to the
   // emulated output while disabled, and the runtime toggle (F5) can flip the
   // cvar live at any point after boot.
+#if SKATE3_HAS_OPENXR
+  rex::graphics::SetNativeGuestOutputRenderer(
+      [](const NativeGuestOutputRenderContext& context, void*) {
+        std::shared_ptr<const FrameScene> scene;
+        { std::lock_guard lock(g_scene_mutex); scene = g_scene; }
+        if (skate3::vr::GameVrEnabled()) {
+          static bool seen_gameplay=false;
+          const bool in_menus=rex::kernel::guest_presence::GameplayContextValue()==0;
+          if (!in_menus) seen_gameplay=true;
+          rex::graphics::RequestNativeGuestOutputPostProcess(true);
+          const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+              PerfClock::now().time_since_epoch()).count();
+          if (!skate3::vr::CanPresentWorld(scene && !scene->items.empty(),
+              now-g_last_publish_ns.load(),in_menus,
+              rex::cvar::Query<bool>("skate3_vr_pause_in_world"),seen_gameplay))
+            return false;
+        }
+        return skate3::vr::RenderStereo(context, std::move(scene), &RenderScene);
+      }, nullptr);
+#else
   rex::graphics::SetNativeGuestOutputRenderer(&RenderScene, nullptr);
+#endif
   // Settings-menu backdrop blur over frames the EMULATED path produced
   // (boot/startup before the native scene takes over, manual emulated
   // mode); native-rendered frames blur inline in RenderScene.
+#if SKATE3_HAS_OPENXR
+  rex::graphics::SetNativeGuestOutputPostProcessor(
+      [](const NativeGuestOutputRenderContext& context, void*) {
+        PostProcessGuestOutput(context, nullptr);
+        if (skate3::vr::GameVrEnabled()) {
+          skate3::vr::PresentFlatMenu(context);
+          rex::graphics::RequestNativeGuestOutputPostProcess(true);
+        }
+      }, nullptr);
+#else
   rex::graphics::SetNativeGuestOutputPostProcessor(&PostProcessGuestOutput, nullptr);
+#endif
   REXLOG_INFO("native-scene: guest output renderer registered (scene {})",
               SceneEnabled() ? "on" : "off");
 }

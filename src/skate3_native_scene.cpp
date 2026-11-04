@@ -3253,6 +3253,7 @@ bool PhotoCardVisible() {
                              .count();
   return now_ns - seen < 250'000'000;
 }
+bool PhotoPresentationActive() { return g_photo_flow_frame.load(std::memory_order_relaxed); }
 
 namespace {
 

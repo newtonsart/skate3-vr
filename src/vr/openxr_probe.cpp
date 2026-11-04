@@ -1,0 +1,155 @@
+#include "openxr_context.h"
+#include "openxr_session.h"
+#include "openxr_gamepad.h"
+#include "openxr_passthrough.h"
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <exception>
+#include <memory>
+#include <stdexcept>
+#include <thread>
+
+int main(int argc, char** argv) {
+  try {
+    const bool passthrough = argc == 2 && std::strcmp(argv[1], "--passthrough") == 0;
+    const bool controllers = argc == 2 && std::strcmp(argv[1], "--controllers") == 0;
+    const bool track = passthrough || controllers || (argc == 2 && std::strcmp(argv[1], "--track") == 0);
+    if (argc > 1 && !track) throw std::runtime_error("Usage: skate3-openxr-probe [--track|--passthrough|--controllers]");
+    skate3::vr::OpenXrContext context;
+    context.Initialize();
+    std::printf("Runtime: %s\n", context.runtime().c_str());
+    std::printf("Passthrough extension enabled: %s\n",context.passthrough_extension_enabled()?"yes":"no");
+    if (passthrough && !context.passthrough_extension_enabled()) {
+      skate3::vr::OpenXrPassthrough room(context,XR_NULL_HANDLE);
+      room.Enable();
+      throw std::runtime_error(room.error());
+    }
+    context.DetectHeadset();
+    std::printf("Passthrough system support: %s\n",context.passthrough_supported()?"yes":"no");
+    if (passthrough && !context.passthrough_supported())
+      throw std::runtime_error("The runtime exposes XR_FB_passthrough, but this headset reports no passthrough support");
+    std::printf("HMD: %s\n", context.headset().c_str());
+    for (size_t eye = 0; eye < context.views().size(); ++eye) {
+      const auto& view = context.views()[eye];
+      std::printf("Eye %zu: %ux%u recommended, samples %u\n", eye,
+          view.recommendedImageRectWidth, view.recommendedImageRectHeight,
+          view.recommendedSwapchainSampleCount);
+    }
+    auto version = [](const char* label, XrVersion value) {
+      std::printf("Vulkan %s: %u.%u.%u\n", label, unsigned(XR_VERSION_MAJOR(value)),
+          unsigned(XR_VERSION_MINOR(value)), unsigned(XR_VERSION_PATCH(value)));
+    };
+    version("minimum", context.min_vulkan_version());
+    version("highest tested by runtime", context.max_vulkan_version());
+    if (!track) {
+      std::puts("Instance and HMD detected. Use --track for a 10-second Vulkan 1.3 session test.");
+      return 0;
+    }
+    skate3::vr::OpenXrSession session(context);
+    session.Create(VK_API_VERSION_1_3);
+    std::unique_ptr<skate3::vr::OpenXrGamepad> gamepad;
+    if(controllers) gamepad=std::make_unique<skate3::vr::OpenXrGamepad>(context.instance(),session.handle());
+    skate3::vr::OpenXrPassthrough room(context,session.handle());
+    std::printf("Vulkan 1.3 session created on %s. Tracking only; no game images submitted.\n", session.gpu_name());
+    using Clock = std::chrono::steady_clock;
+    auto start = Clock::now();
+    auto deadline = start + std::chrono::seconds(15);
+    auto next_log = start;
+    uint32_t frames = 0, valid_head = 0, tracked_head = 0, valid_eyes = 0, renderable = 0, controller_samples = 0, aim_samples = 0;
+    XrSessionState previous = XR_SESSION_STATE_UNKNOWN;
+    float minimum[3] = {INFINITY, INFINITY, INFINITY};
+    float maximum[3] = {-INFINITY, -INFINITY, -INFINITY};
+    while (Clock::now() < deadline && session.PollEvents()) {
+      if (session.state() != previous) {
+        previous = session.state();
+        std::printf("Session state: %d\n", int(previous));
+      }
+      skate3::vr::TrackingFrame frame;
+      if (!session.BeginFrame(frame)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+      }
+      skate3::vr::ControllerPad pad;
+      skate3::vr::ControllerHands hands;
+      if(gamepad) {
+        pad=skate3::vr::MapTouchControls(gamepad->Sample(session.state()==XR_SESSION_STATE_FOCUSED));
+        controller_samples+=pad.connected;
+        hands=gamepad->LocateHands(session.local_space(),frame.display_time);
+        aim_samples+=hands.aim[0].valid || hands.aim[1].valid;
+      }
+      if (passthrough && frame.should_render) {
+        if (!room.Enable()) {
+          session.EndFrame(frame);
+          throw std::runtime_error(room.error());
+        }
+        XrCompositionLayerPassthroughFB layer{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
+        layer.flags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        layer.layerHandle=room.layer();
+        const auto* header=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer);
+        session.EndFrame(frame,1,&header);
+      } else session.EndFrame(frame);
+      if (!frames) deadline = Clock::now() + std::chrono::seconds(10);
+      ++frames;
+      renderable += frame.should_render;
+      constexpr auto head_valid = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
+      constexpr auto head_tracked = XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+      constexpr auto eyes_valid = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT;
+      if ((frame.head.locationFlags & head_valid) == head_valid) {
+        ++valid_head;
+        const auto& orientation = frame.head.pose.orientation;
+        const float norm = orientation.x*orientation.x + orientation.y*orientation.y +
+                           orientation.z*orientation.z + orientation.w*orientation.w;
+        if (!std::isfinite(norm) || std::abs(norm - 1.0f) > 0.01f)
+          throw std::runtime_error("Invalid tracked head quaternion");
+        const float position[] = {frame.head.pose.position.x, frame.head.pose.position.y, frame.head.pose.position.z};
+        for (int axis = 0; axis < 3; ++axis) {
+          if (!std::isfinite(position[axis])) throw std::runtime_error("Non-finite head position");
+          minimum[axis] = std::min(minimum[axis], position[axis]);
+          maximum[axis] = std::max(maximum[axis], position[axis]);
+        }
+      }
+      tracked_head += (frame.head.locationFlags & head_tracked) == head_tracked;
+      valid_eyes += (frame.view_flags & eyes_valid) == eyes_valid;
+      if ((frame.view_flags & eyes_valid) == eyes_valid) {
+        for (const auto& eye : frame.eyes) {
+          if (!(eye.fov.angleLeft < eye.fov.angleRight && eye.fov.angleDown < eye.fov.angleUp))
+            throw std::runtime_error("Invalid asymmetric eye FOV");
+        }
+      }
+      if (Clock::now() >= next_log) {
+        const auto& p = frame.head.pose.position;
+        const auto& q = frame.head.pose.orientation;
+        std::printf("Head flags=0x%llx pos=(%.4f %.4f %.4f)m quat=(%.4f %.4f %.4f %.4f) period=%.3fms shouldRender=%d\n",
+            static_cast<unsigned long long>(frame.head.locationFlags), p.x, p.y, p.z, q.x, q.y, q.z, q.w,
+            double(frame.display_period) / 1e6, int(frame.should_render));
+        next_log = Clock::now() + std::chrono::seconds(1);
+        if(gamepad) std::printf("Controller connected=%d buttons=0x%04x sticks=(%d,%d)/(%d,%d) triggers=%u/%u\n",
+            int(pad.connected),unsigned(pad.buttons),pad.lx,pad.ly,pad.rx,pad.ry,unsigned(pad.lt),unsigned(pad.rt));
+        if(gamepad) std::printf("Tracked window pointers L/R=%d/%d\n",int(hands.aim[0].valid),int(hands.aim[1].valid));
+      }
+    }
+    const bool room_submitted=room.layer()!=XR_NULL_HANDLE;
+    room.Disable();
+    session.RequestExit();
+    const auto exit_deadline = Clock::now() + std::chrono::seconds(2);
+    while (Clock::now() < exit_deadline && session.PollEvents() && session.running())
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::printf("Frames=%u valid6DoF=%u tracked6DoF=%u validStereoPoses=%u shouldRender=%u\n",
+        frames, valid_head, tracked_head, valid_eyes, renderable);
+    if (!valid_head || !tracked_head || !valid_eyes) throw std::runtime_error("No valid tracked 6DoF/stereo samples");
+    std::printf("Head position range: (%.4f %.4f %.4f)m\n", maximum[0]-minimum[0], maximum[1]-minimum[1], maximum[2]-minimum[2]);
+    if (passthrough && !room_submitted) throw std::runtime_error("No renderable frame for passthrough test; activate Quest Link in the headset");
+    if(controllers && !controller_samples) throw std::runtime_error("No active Touch controls; focus this PCVR session and wake the controllers");
+    if(controllers && !aim_samples) throw std::runtime_error("No tracked controller pointers; keep a controller visible to the headset cameras");
+    if(controllers) std::printf("Active controller samples: %u; button mapping still needs gameplay confirmation.\n",controller_samples);
+    std::puts(passthrough ? "Passthrough layer submitted; headset visual confirmation is still required."
+                         : "Vulkan session and predicted 6DoF/eye poses verified. Stereo image rendering remains untested.");
+    return 0;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "OpenXR: %s\n", error.what());
+    return 1;
+  }
+}

@@ -12,6 +12,13 @@
 #include "skate3_win_icon.h"
 #include "skate3_title_update_installer.h"
 #include "skate3_user_settings.h"
+#if SKATE3_HAS_OPENXR
+#include "vr/game_vr.h"
+#include "vr/settings_surface.h"
+#include "vr/editor.h"
+#include "vr/controller_driver.h"
+#include <rex/graphics/vulkan/graphics_system.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -92,6 +99,10 @@ REXCVAR_DECLARE(bool, skate3_native_render_scene_freecam_capture_input);
 
 REXCVAR_DEFINE_STRING(skate3_dlc_root, "", "Skate 3",
                       "Directory containing Skate 3 DLC package files");
+REXCVAR_DEFINE_BOOL(skate3_setup_only, false, "Setup", "Install game files and TU3, then exit without starting the game")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(skate3_install_iso, "", "Setup", "Local ISO selected by the Windows installer")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(skate3_auto_install_dlc, true, "Skate 3",
                     "Install DLC package files found in configured DLC folders");
 REXCVAR_DEFINE_BOOL(skate3_ultrawide, false, "Skate 3",
@@ -190,6 +201,13 @@ void SetRestartArgument(std::vector<std::string>& args, std::string name, std::s
 
 constexpr std::string_view kUserDirectoryName = "skate3";
 constexpr std::string_view kSettingsFilename = "settings.toml";
+bool UseSettingsBackdropBlur() {
+#if SKATE3_HAS_OPENXR
+  return !rex::cvar::Query<bool>("skate3_vr") && !rex::cvar::Query<bool>("skate3_vr_settings_test");
+#else
+  return true;
+#endif
+}
 constexpr std::string_view kDlcDirectoryName = "dlc";
 constexpr std::string_view kSavesDirectoryName = "saves";
 constexpr double kSixteenNineAspect = 16.0 / 9.0;
@@ -675,6 +693,11 @@ std::optional<rex::PathConfig> Skate3BaseApp::OnFinalizePaths(
     runtime_paths = std::move(tu_paths);
   }
 #endif
+  if (REXCVAR_GET(skate3_setup_only)) {
+    REXLOG_INFO("Setup completed: game files and title update are ready; gameplay was not started");
+    app_context().QuitFromUIThread();
+    return std::nullopt;
+  }
 #if defined(_WIN32)
   // Window/taskbar icon sourced from the user's OWN game art at
   // runtime (game/nxeart); the shipped exe and the repo carry no EA
@@ -688,11 +711,29 @@ std::optional<rex::PathConfig> Skate3BaseApp::OnFinalizePaths(
 }
 
 void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
+#if SKATE3_HAS_OPENXR
+  drawer->SetDrawMirror([this,dialog_was_open=false](rex::ui::UIDrawContext& context) mutable -> rex::ui::UIDrawContext* {
+    const bool system_dialog=rex::kernel::xam::xeXamIsUIActive();
+    const bool opening_dialog=system_dialog && !dialog_was_open;
+    dialog_was_open=system_dialog;
+    if (!system_dialog && (!simple_settings_dialog_ || !simple_settings_dialog_->visible())) return nullptr;
+    if (!skate3::vr::GameVrEnabled() && !rex::cvar::Query<bool>("skate3_vr_settings_test")) return nullptr;
+    if (opening_dialog && window()) {
+#if defined(_WIN32)
+      SetForegroundWindow(static_cast<HWND>(window()->GetNativeWindowHandle()));
+#endif
+      window()->Focus();
+      REXLOG_INFO("VR: game dialog opened; desktop keyboard focus={}",window()->HasFocus());
+    }
+    return skate3::vr::BeginSettingsSurface(context,system_dialog);
+  }, [] { skate3::vr::EndSettingsSurface(); });
+#endif
   // Native/emulated corner readout (top right; off by default, cvar
   // skate3_native_render_mode_indicator shows it live). Input-transparent,
   // so it never affects cursor or focus handling.
   render_mode_indicator_ = std::make_unique<skate3::RenderModeIndicator>(drawer);
   RegisterAppBind("bind_skate3_menu", "Escape", "Skate 3 settings", [this] {
+    if (rex::kernel::xam::xeXamIsUIActive()) return;
     // Escape backs out of the settings screen level by level (rows ->
     // category rail -> closed); when the screen is closed it opens it.
     if (simple_settings_dialog_ && simple_settings_dialog_->visible()) {
@@ -756,6 +797,18 @@ void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
 }
 
 void Skate3BaseApp::OnPostSetup() {
+#if SKATE3_HAS_OPENXR
+  skate3::vr::InitializeSettingsSurface();
+  if (rex::cvar::Query<bool>("skate3_vr_settings_test"))
+    app_context().CallInUIThreadDeferred([this] { ToggleSimpleSettings(); });
+  if (rex::cvar::Query<bool>("skate3_vr")) {
+    rex::ui::RegisterBind("bind_skate3_vr_capture", "Ctrl+F7", "Capture VR stereo images", [] { skate3::vr::CaptureGameVr(); });
+    rex::ui::RegisterBind("bind_skate3_vr_recenter", "Ctrl+F8", "Recenter VR view", [] { skate3::vr::RecenterGameVr(); });
+    rex::ui::RegisterBind("bind_skate3_vr_color", "Ctrl+F9", "Toggle VR color conversion", [] { skate3::vr::ToggleGameVrColor(); });
+    rex::ui::RegisterBind("bind_skate3_vr_culling", "Ctrl+F10", "Toggle experimental VR culling expansion", [] { skate3::vr::ToggleGameVrCulling(); });
+    rex::ui::RegisterBind("bind_skate3_vr_mode", "Ctrl+F11", "Cycle immersive VR / 3D window / room view", [] { skate3::vr::CycleGameVrMode(); });
+  }
+#endif
   skate3::shader_disasm::RunIfRequested();
   ApplySelectedProfileToRuntime();
   ApplyGameplayCursorMode();
@@ -775,6 +828,9 @@ void Skate3BaseApp::OnPostSetup() {
   }
 
   if (auto* input_system = static_cast<rex::input::InputSystem*>(runtime()->input_system())) {
+#if SKATE3_HAS_OPENXR
+    if (rex::cvar::Query<bool>("skate3_vr")) input_system->AddDriver(skate3::vr::CreateVrControllerDriver());
+#endif
     // Input/guest threads. Gated by callback_gate_ (see the header): after
     // OnShutdown this keeps guest input off and never touches `this`.
     input_system->SetActiveCallback([this, gate = callback_gate_]() {
@@ -905,6 +961,16 @@ void Skate3BaseApp::OnPostSetup() {
   }
 }
 
+void Skate3BaseApp::OnPreSetup(rex::RuntimeConfig& config) {
+#if SKATE3_HAS_OPENXR
+  if (!REXCVAR_GET(skate3_setup_only) &&
+      (rex::cvar::Query<bool>("skate3_vr") || rex::cvar::Query<bool>("skate3_vr_resolution_test"))) {
+    skate3::vr::InitializeGameVr();
+    config.graphics = std::make_unique<rex::graphics::vulkan::VulkanGraphicsSystem>();
+  }
+#endif
+}
+
 void Skate3BaseApp::OnShutdown() {
   // First: close the gate on the callbacks OnPostSetup gave to the input
   // system, demo path and Options screen (they capture `this`). Exclusive, so
@@ -924,6 +990,16 @@ void Skate3BaseApp::OnShutdown() {
   // ReXApp::OnDestroy calls OnShutdown before tearing down its own overlays,
   // so unregistering here is always inside the registry's lifetime.
   UnregisterAppBinds();
+#if SKATE3_HAS_OPENXR
+  skate3::vr::CancelVrEditor();
+  if (imgui_drawer()) imgui_drawer()->SetDrawMirror({},{});
+  rex::ui::UnregisterBind("bind_skate3_vr_recenter");
+  rex::ui::UnregisterBind("bind_skate3_vr_capture");
+  rex::ui::UnregisterBind("bind_skate3_vr_color");
+  rex::ui::UnregisterBind("bind_skate3_vr_culling");
+  rex::ui::UnregisterBind("bind_skate3_vr_mode");
+  skate3::vr::ShutdownGameVr();
+#endif
   ApplyGameplayCursorMode();
   skate3::native_scene::SetSettingsMenuBlur(false);
   {
@@ -958,8 +1034,11 @@ void Skate3BaseApp::ToggleSimpleSettings() {
     if (simple_settings_dialog_->visible()) {
       simple_settings_dialog_->Hide();
     } else {
+#if SKATE3_HAS_OPENXR
+      skate3::vr::SetGameVrSettingsVisible(true);
+#endif
       ApplySettingsCursorMode();
-      skate3::native_scene::SetSettingsMenuBlur(true);
+      skate3::native_scene::SetSettingsMenuBlur(UseSettingsBackdropBlur());
       // Before Show: the overlay loads its rows from the live cvars and
       // saves them on every change (see SuspendMaxQuality).
       skate3::SuspendMaxQuality();
@@ -1006,6 +1085,10 @@ void Skate3BaseApp::ToggleSimpleSettings() {
   // Fires on every Hide (B/Esc, Close Settings, Close Game), the one spot
   // that reliably sees the menu close regardless of who initiated it.
   auto close_settings = [this]() {
+#if SKATE3_HAS_OPENXR
+    skate3::vr::CancelVrEditor();
+    skate3::vr::SetGameVrSettingsVisible(false);
+#endif
     skate3::native_scene::SetSettingsMenuBlur(false);
     ApplyGameplayCursorMode();
     skate3::ResumeMaxQuality();
@@ -1041,10 +1124,20 @@ void Skate3BaseApp::ToggleSimpleSettings() {
     std::unique_lock lock(callback_gate_->mutex);
     simple_settings_dialog_ = std::move(dialog);
   }
+#if SKATE3_HAS_OPENXR
+  simple_settings_dialog_->SetLiveEditor([this](ImGuiIO& io) {
+    auto* rt=runtime();
+    auto* input=rt ? static_cast<rex::input::InputSystem*>(rt->input_system()) : nullptr;
+    return skate3::vr::DrawVrEditor(io,input,user_settings_path_);
+  });
+#endif
   ApplySettingsCursorMode();
-  skate3::native_scene::SetSettingsMenuBlur(true);
+  skate3::native_scene::SetSettingsMenuBlur(UseSettingsBackdropBlur());
   skate3::SuspendMaxQuality();
   simple_settings_dialog_->Show();
+#if SKATE3_HAS_OPENXR
+  skate3::vr::SetGameVrSettingsVisible(true);
+#endif
 }
 
 void Skate3BaseApp::ToggleNativeDebug() {
