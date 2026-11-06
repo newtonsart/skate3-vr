@@ -44,7 +44,7 @@ struct IbBinding {
 
 struct MeshBuffers {
   bool cull_bounds_valid = false;
-  float cull_bbox_min[3]{}, cull_bbox_max[3]{};
+  float cull_bbox_min[3]{}, cull_bbox_max[3]{};  // decoded local-space vertices
   nrhi::Buffer* vb = nullptr;
   nrhi::Buffer* ib = nullptr;
   VbBinding vb_view{};

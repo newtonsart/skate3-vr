@@ -19,6 +19,7 @@ struct EyeCamera {
   float hud_transform[4]={1,1,0,0};
   StereoShadows* shadows=nullptr;
   double scene_copy_ms=0;
+  uint32_t frustum_skips=0,world_draws=0;
 };
 void InitializeGameVr();
 void ShutdownGameVr();

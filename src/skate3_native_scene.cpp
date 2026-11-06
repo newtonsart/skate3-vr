@@ -6606,20 +6606,26 @@ bool CornersOutsideFrustum(const float (&corners)[8][3], const float vp[16],
 // The item's world-space bbox against the frustum (statics: bbox is
 // mesh-local, world transforms it; fmt-57 absolute geometry carries an
 // identity world with world-space bounds).
-bool ItemOutsideFrustum(const DrawItem& it, const float vp[16], float margin,
-                        float hor_scale) {
+bool BoundsOutsideFrustum(const float bbox_min[3], const float bbox_max[3],
+                          const float world[16], const float vp[16], float margin,
+                          float hor_scale) {
   float corners[8][3];
   for (int c = 0; c < 8; ++c) {
-    const float l[3] = {c & 1 ? it.bbox_max[0] : it.bbox_min[0],
-                        c & 2 ? it.bbox_max[1] : it.bbox_min[1],
-                        c & 4 ? it.bbox_max[2] : it.bbox_min[2]};
-    const float* w = it.world;
+    const float l[3] = {c & 1 ? bbox_max[0] : bbox_min[0],
+                        c & 2 ? bbox_max[1] : bbox_min[1],
+                        c & 4 ? bbox_max[2] : bbox_min[2]};
+    const float* w = world;
     for (int k = 0; k < 3; ++k) {
       corners[c][k] = l[0] * w[0 * 4 + k] + l[1] * w[1 * 4 + k] +
                       l[2] * w[2 * 4 + k] + w[3 * 4 + k];
     }
   }
   return CornersOutsideFrustum(corners, vp, margin, hor_scale);
+}
+
+bool ItemOutsideFrustum(const DrawItem& it, const float vp[16], float margin,
+                        float hor_scale) {
+  return BoundsOutsideFrustum(it.bbox_min, it.bbox_max, it.world, vp, margin, hor_scale);
 }
 
 // Axis-aligned cube of half-extent `half` around `center` against the

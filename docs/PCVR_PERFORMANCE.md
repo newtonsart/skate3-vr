@@ -388,3 +388,53 @@ costs are not fully covered. Twelve XMA errors remained; no texture decode
 failures or access violations were logged. No sustained 120 FPS claim is made.
 Full local results and exclusions are in the outer workspace's
 `out/user-view-load-results-20261106.md` and `.json`.
+
+## Cull cached rigid geometry using decoded bounds (2026-11-06 evening)
+
+The real immersive trace points toward per-item CPU preparation. The old
+per-eye guard required every decoded vertex to fit the captured guest bounds
+and those bounds to remain bit-identical. Bad or broad guest bounds therefore
+left much off-screen geometry on the draw path. DecodeMesh now computes one
+finite local AABB from the exact cached/uploaded positions. The color pass
+checks that box with the current item transform and eye camera, keeping the
+existing 1.2 side-plane margin. It does not shorten draw distance, remove
+completion fences or change retention/shadow rules. Empty/nonfinite decodes
+fail open; skinning, bones, ROPA and cloth stay excluded. Sky is now excluded
+as well because its draw adds the camera position to the world matrix.
+Periodic headset logs add captured-item, world-draw and frustum-skip counters
+per eye to distinguish capture density from actual submitted drawing.
+
+The compiled regression uses the actual accumulator and cull branch. It
+covers invalid/empty inputs, misleading guest bounds, excluded objects,
+head turns and 2000 transformed visible-vertex checks. The build and all eight
+Python regression scripts plus stereo math passed.
+
+Temporary GPU validation rendered rigid world geometry in flat colors at
+2840x3080 with five yaw offsets from -60 to +60 degrees. It alternated pass
+order and compared uncull/decoded, old-cull/decoded and uncull/uncull control
+pairs. In 3885 large-scene old/new pairs after warmup, median CPU preparation
+was 1.3860/0.6458 ms per eye, with median paired saving 0.7130 ms. Median world
+draw counts were 2425/1025. This is the filtered static-world color pass,
+not full normal-shading frame time or a 54% whole-game FPS improvement.
+
+Each comparison kind has 64 pixel pairs (559820800 pixels). Old/new had two
+pixels with RGB10 delta above 12 in one pair; the unchanged control had six
+in two pairs. No broad missing silhouette was detected. The flat-color
+preview contains scene geometry, with at least 530788 pixels differing from
+its first pixel in every control capture. Animated/sky/water/time-scrolling
+materials were excluded from this image experiment. The temporary comparison
+code is removed from the final executable. Detailed local results are in the
+outer workspace's out/decoded-bounds-validation-20261106/control-results.json.
+Headset cadence, the specific red skatepark and all material cases still
+require real play validation; sustained 120 FPS remains unproven.
+
+The final normal-shading two-eye simulated traversal completed 90 seconds,
+14798 samples and approximately 112 m of estimated player travel, with 29
+moving intervals. No error-level messages, texture decode failures or access
+violations were logged. Three failed file opens remain; absence of XMA errors
+in this run does not establish an audio fix. Moving shared-pair median/p95
+were 3.1358/5.8271 ms, with 7/2229 pairs above 8.33 ms and a 14.3745 ms maximum.
+This route is not a matched baseline comparison and excludes OpenXR, Link and
+compositor work. Results are in out/decoded-bounds-validation-20261106/
+final-route-results.json in the outer workspace. The same separate candidate
+is updated, with its previous binary set preserved in before-decoded-bounds.

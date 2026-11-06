@@ -571,6 +571,9 @@ float CharFadeAlpha(const DrawItem& item);
 // attribution.
 bool ItemOutsideFrustum(const DrawItem& it, const float vp[16], float margin,
                         float hor_scale = 1.0f);
+bool BoundsOutsideFrustum(const float bbox_min[3], const float bbox_max[3],
+                          const float world[16], const float vp[16], float margin,
+                          float hor_scale);
 
 // Occlusion-cull handoff for the guest-side dispatch filter (defined in
 // skate3_native_scene_gpu.cpp): copies the most recent render frame's

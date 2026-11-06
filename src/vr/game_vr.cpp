@@ -807,6 +807,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
         scene?scene->generation:0,s.capture_menu,window,photo);
     double render_ms[2]{},copy_ms[2]{};
     double scene_copy_ms[2]{};
+    uint32_t frustum_skips[2]{},world_draws[2]{};
     StereoShadows shadows;
     const bool compare=REXCVAR_GET(skate3_vr_compare_frame_work) && s.perf_samples<600;
     const bool share_work=compare ? s.perf_samples%2==0 : REXCVAR_GET(skate3_vr_share_frame_work);
@@ -850,6 +851,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       render_ms[eye]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-render_start).count();
       if (!eye) render_ms[eye]+=shared_scene_copy_ms;
       scene_copy_ms[eye]+=camera.scene_copy_ms;
+      frustum_skips[eye]=camera.frustum_skips; world_draws[eye]=camera.world_draws;
       if(!rendered) break;
       const auto copy_start=std::chrono::steady_clock::now();
       s.Transfer(context,eye,capture,nullptr,feather,aspect,pointer);
@@ -976,6 +978,8 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
             s.gpu_render_ms[0],s.gpu_render_ms[1],s.gpu_copy_ms[0],s.gpu_copy_ms[1],scene_copy_ms[0],scene_copy_ms[1],share_work);
         if (s.timing) REXLOG_INFO("VR transfer CPU: submit L/R={:.3f}/{:.3f}ms image-acquire/wait L/R={:.3f}/{:.3f}ms completion L/R={:.3f}/{:.3f}ms",
             s.transfer_submit_ms[0],s.transfer_submit_ms[1],s.transfer_image_ms[0],s.transfer_image_ms[1],s.transfer_fence_ms[0],s.transfer_fence_ms[1]);
+        REXLOG_INFO("VR visibility: captured={} world-draws L/R={}/{} frustum-skips L/R={}/{}",
+            scene?scene->items.size():0,world_draws[0],world_draws[1],frustum_skips[0],frustum_skips[1]);
       }
     } else { s.session->EndFrame(frame); begun=false; }
     if(!rendered && capture_now) rex::cvar::SetFlagByName("skate3_vr_capture_once","true");

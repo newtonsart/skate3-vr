@@ -983,7 +983,9 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
 
   const uint8_t* src_vb = vb_payload;
   uint32_t garbage = 0;
-  bool cull_bounds_valid = true;
+  bool cull_bounds_valid = num_verts != 0;
+  std::fill_n(out.cull_bbox_min, 3, std::numeric_limits<float>::infinity());
+  std::fill_n(out.cull_bbox_max, 3, -std::numeric_limits<float>::infinity());
   int min_bi = 255;
   int max_bi = -1;
   // Map both upload buffers up front so a Map() failure fails the decode
@@ -1040,9 +1042,12 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
         z < item.bbox_min[2] - 2.f || z > item.bbox_max[2] + 2.f) {
       ++garbage;
     }
-    if (!(x >= item.bbox_min[0] && x <= item.bbox_max[0] &&
-          y >= item.bbox_min[1] && y <= item.bbox_max[1] &&
-          z >= item.bbox_min[2] && z <= item.bbox_max[2])) cull_bounds_valid = false;
+    const float cull_pos[3] = {x, y, z};
+    for (int axis = 0; axis < 3; ++axis) {
+      cull_bounds_valid &= std::isfinite(cull_pos[axis]);
+      out.cull_bbox_min[axis] = std::min(out.cull_bbox_min[axis], cull_pos[axis]);
+      out.cull_bbox_max[axis] = std::max(out.cull_bbox_max[axis], cull_pos[axis]);
+    }
     const auto decode_uv = [&](uint32_t fmt, uint32_t offset, float& u, float& w) {
       u = 0.0f;
       w = 0.0f;
@@ -1342,8 +1347,6 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
         item.vb_addr);
   }
   out.cull_bounds_valid = cull_bounds_valid;
-  std::memcpy(out.cull_bbox_min, item.bbox_min, sizeof(out.cull_bbox_min));
-  std::memcpy(out.cull_bbox_max, item.bbox_max, sizeof(out.cull_bbox_max));
 
   if (item.cloth_quads) {
     // Quad-list topology with no guest index buffer (live vertex range
@@ -10933,12 +10936,15 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   const auto timed_draw = [&](const DrawItem& item) {
 #if SKATE3_HAS_OPENXR
     if (REXCVAR_GET(skate3_vr_static_frustum_cull) && vr_eye && vr_eye->override_camera &&
-        !item.skinned && !item.ropa && !item.cloth_quads && item.bones.empty()) {
+        !item.unlit && !item.skinned && !item.ropa && !item.cloth_quads && item.bones.empty()) {
       const auto mesh=g_r.meshes.find(item.mesh);
+      // These bounds enclose the cached vertices the draw actually uses.
       if (mesh!=g_r.meshes.end() && mesh->second.cull_bounds_valid &&
-          std::memcmp(mesh->second.cull_bbox_min,item.bbox_min,sizeof(item.bbox_min))==0 &&
-          std::memcmp(mesh->second.cull_bbox_max,item.bbox_max,sizeof(item.bbox_max))==0 &&
-          ItemOutsideFrustum(item,scene.view_proj,1.2f)) return;
+          BoundsOutsideFrustum(mesh->second.cull_bbox_min,mesh->second.cull_bbox_max,
+                               item.world,scene.view_proj,1.2f,1.0f)) {
+        ++vr_eye->frustum_skips;
+        return;
+      }
     }
 #endif
     if (!prof_items) {
@@ -13040,6 +13046,9 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
                     twod_t0 - mid_t0)
                     .count()));
   g_pw_render.Add(perf_ns_since(render_t0));
+#if SKATE3_HAS_OPENXR
+  if (vr_eye) vr_eye->world_draws=drawn;
+#endif
   const uint64_t frames = g_frames_rendered.fetch_add(1) + 1;
   MaybeDumpSceneRing();
   LogFrameStats(scene, frames, drawn, drawn_2d, drawn_spline, shadow_ready,
