@@ -15,6 +15,57 @@ def apply(sdk):
             raise ValueError(f"Pinned SDK patch anchor mismatch: {name}: {old[:65]}")
         path.write_text(text.replace(old, new), encoding="utf-8")
 
+    edit("src/audio/xma_context.cpp",
+         """    stream.SetOffset(data->input_buffer_read_offset);
+
+    if (data->input_buffer_read_offset > current_input_size * 8) {
+      REXAPU_ERROR("XmaContext {} old: input offset {} exceeds buffer size {}", id(),
+                   uint32_t(data->input_buffer_read_offset), current_input_size * 8);
+      SwapInputBuffer(data);
+      return;
+    }
+""",
+         """    if (data->input_buffer_read_offset >= current_input_size * 8) {
+      if (data->input_buffer_read_offset > current_input_size * 8) {
+        REXAPU_ERROR("XmaContext {} old: input offset {} exceeds buffer size {}", id(),
+                     uint32_t(data->input_buffer_read_offset), current_input_size * 8);
+      }
+      SwapInputBuffer(data);
+      return;
+    }
+    stream.SetOffset(data->input_buffer_read_offset);
+""")
+    edit("src/audio/xma_context.cpp",
+         """              data->input_buffer_read_offset = GetPacketFirstFrameOffsetOld(data);""",
+         """              const uint32_t next_offset = GetPacketFirstFrameOffsetOld(data);
+              // Keep the swap's header offset if no frame starts in the next buffer.
+              if (next_offset < data->GetCurrentInputBufferPacketCount() * kBitsPerPacket) {
+                data->input_buffer_read_offset = next_offset;
+              }""")
+    edit("src/audio/xma_context.cpp",
+         """    if (offset <= data->input_buffer_read_offset) {
+      REXAPU_NOISY_DEBUG("XmaContext {} old: non-advancing offset {} <= {}", id(), offset,""",
+         """    // Finish a block before storing a next-packet cursor outside its buffer.
+    if (offset >= current_input_size * 8) {
+      if (!reuse_input_buffer) {
+        reuse_input_buffer = TrySetupNextLoopOld(data, true);
+      }
+      if (!reuse_input_buffer) {
+        if (is_streaming) {
+          SwapInputBuffer(data);
+        } else {
+          old_is_stream_done_ = true;
+        }
+        if (output_rb.write_offset() == output_rb.read_offset()) {
+          data->output_buffer_valid = 0;
+        }
+      }
+      return;
+    }
+
+    if (offset <= data->input_buffer_read_offset) {
+      REXAPU_NOISY_DEBUG("XmaContext {} old: non-advancing offset {} <= {}", id(), offset,""")
+
     for variable in ("game_dir", "user_dir", "update_dir", "cache_dir"):
         edit("src/ui/rex_app.cpp", f"{variable} = *config_value;",
              f"{variable} = rex::to_path(*config_value);")
@@ -62,6 +113,20 @@ def apply(sdk):
     rex::cvar::SetFlagByName("skate3_vr_edit_mode", "0");
     return;
   }""")
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         'labels.push_back(auto_cap > 0.0f ? "Auto (" + std::to_string(int(auto_cap)) + " FPS)"\n'
+         '                                     : std::string("Auto"));',
+         'labels.push_back(HasCvar("skate3_vr") && rex::cvar::Query<bool>("skate3_vr")\n'
+         '                         ? "Auto (OpenXR)"\n'
+         '                         : auto_cap > 0.0f ? "Auto (" + std::to_string(int(auto_cap)) + " FPS)"\n'
+         '                                          : std::string("Auto"));')
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         '"rate for the smoothest pacing.",',
+         '"rate for the smoothest pacing. In VR, Auto uses OpenXR pacing.",')
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         '"refresh rate cannot be shown and only make steady motion judder.";',
+         '"refresh rate cannot be shown and only make steady motion judder. "\n'
+         '            "In VR, Auto uses OpenXR pacing instead of the desktop limit.";')
     edit("src/ui/overlay/simple_settings_overlay.cpp",
          "void SimpleSettingsDialog::OnDraw(ImGuiIO& io) {\n  if (!visible_) {\n    return;\n  }",
          """void SimpleSettingsDialog::OnDraw(ImGuiIO& io) {
@@ -395,9 +460,9 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create""")
          "    XE_UI_VULKAN_FEATURE(sampleRateShading)",
          "    XE_UI_VULKAN_FEATURE(sampleRateShading)\n"
          "    enabled_features.shaderStorageImageMultisample = supported_features.shaderStorageImageMultisample;")
-    edit("include/rex/graphics/vulkan/command_processor.h", "  // Returns the deferred drawing command list", """  // OpenXR image release requires all recorded writes to have completed.
-  bool FlushNativeForExternal() {
-    if (!EndSubmission(false) || !AwaitAllQueueOperationsCompletion()) return false;
+    edit("include/rex/graphics/vulkan/command_processor.h", "  // Returns the deferred drawing command list", """  // A following transfer on this queue may supply the completion fence instead.
+  bool FlushNativeForExternal(bool wait) {
+    if (!EndSubmission(false) || (wait && !AwaitAllQueueOperationsCompletion())) return false;
     return BeginSubmission(false);
   }
 
@@ -405,16 +470,16 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create""")
     edit("include/rex/graphics/vulkan/native_rhi_vulkan.h", "class VulkanCommandProcessor;", """class VulkanCommandProcessor;
 struct NativeVulkanImage { VkImage image; VkImageView view; };
 NativeVulkanImage NativeRhiGetImage(nrhi::Texture* texture);
-bool NativeRhiFlushForExternal(nrhi::Device* device);
+bool NativeRhiFlushForExternal(nrhi::Device* device, bool wait = true);
 void* NativeRhiGetVulkanDevice(nrhi::Device* device);""")
     edit("src/graphics/vulkan/native_rhi_vulkan.cpp", "nrhi::Device* CreateNativeRhiDevice(VulkanCommandProcessor* command_processor) {", """NativeVulkanImage NativeRhiGetImage(nrhi::Texture* texture) {
   auto* t = static_cast<NrTextureVulkan*>(texture);
   return {t->image, t->attachment_view};
 }
-bool NativeRhiFlushForExternal(nrhi::Device* device) {
+bool NativeRhiFlushForExternal(nrhi::Device* device, bool wait) {
   auto* d = static_cast<NrDeviceVulkan*>(device);
   d->EndFrame();
-  return d->cp()->FlushNativeForExternal();
+  return d->cp()->FlushNativeForExternal(wait);
 }
 void* NativeRhiGetVulkanDevice(nrhi::Device* device) {
   return static_cast<NrDeviceVulkan*>(device)->cp()->GetVulkanDevice();

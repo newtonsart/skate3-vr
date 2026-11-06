@@ -35,6 +35,10 @@ struct SkinSampleVert {
 // open-coded __try{memcpy}__except compiles to an UNPROTECTED `jmp memcpy`.
 bool GuestTryCopy(void* dst, const void* src, size_t size);
 
+// Allocation-metadata check for speculative prewarm reads, not a replacement
+// for GuestTryCopy: streaming can still revoke the range after this check.
+bool GuestMetadataReadable(uint32_t addr, uint32_t size);
+
 // Read-fault recovery for the renderer's RAW guest loads (the REX_LOAD-style
 // structure walks that do not route through GuestTryCopy). World streaming
 // can revoke a guest range between a pointer being captured and the renderer

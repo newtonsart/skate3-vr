@@ -7,6 +7,8 @@
 #include <cstring>
 
 #include "generated/skate3_init.h"
+#include <rex/system/kernel_state.h>
+#include <rex/system/xmemory.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -25,6 +27,16 @@
 #endif
 
 namespace skate3::native_scene {
+
+bool GuestMetadataReadable(uint32_t addr, uint32_t size) {
+  if (addr < 0x10000 || size == 0 || uint64_t(addr) + size > 0x100000000ull) {
+    return false;
+  }
+  auto* memory = rex::system::kernel_memory();
+  auto* heap = memory ? memory->LookupHeap(addr) : nullptr;
+  return heap && heap->QueryRangeAccess(addr, addr + size - 1) !=
+                     rex::memory::PageAccess::kNoAccess;
+}
 
 // Lock-free guarded bulk copy for reads of guest payloads (shared here so
 // every TU uses the one correctly-built guard). GuestRangeReadable's

@@ -2,6 +2,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+import subprocess
 from ApplyOpenXRInterop import apply
 
 SOURCE = Path(__file__).resolve().parents[1] / "third_party/rexglue-sdk"
@@ -17,10 +18,48 @@ FILES = ["include/rex/ui/vulkan/instance.h", "src/ui/vulkan/vulkan_instance.cpp"
          "src/graphics/vulkan/command_processor.cpp",
          "include/rex/ui/overlay/install_wizard_overlay.h",
          "src/ui/overlay/install_wizard_overlay.cpp", "thirdparty/CMakeLists.txt",
-         "src/ui/rex_app.cpp", "src/core/cvar.cpp"]
+         "src/ui/rex_app.cpp", "src/core/cvar.cpp", "src/audio/xma_context.cpp"]
 
 
 class InteropTests(unittest.TestCase):
+    def test_external_submission_wait_and_failures(self):
+        patch = (Path(__file__).parent / "ApplyOpenXRInterop.py").read_text()
+        start = patch.index("  bool FlushNativeForExternal(bool wait)")
+        method = patch[start:patch.index("\n\n  // Returns", start)]
+        source = r'''
+#include <cassert>
+#include <vector>
+struct Processor {
+  std::vector<int> calls;
+  bool end_ok=true, wait_ok=true, begin_ok=true;
+  bool EndSubmission(bool swap) { assert(!swap); calls.push_back(1); return end_ok; }
+  bool AwaitAllQueueOperationsCompletion() { calls.push_back(2); return wait_ok; }
+  bool BeginSubmission(bool guest) { assert(!guest); calls.push_back(3); return begin_ok; }
+'''+method+r'''
+};
+int main() {
+  Processor p; assert(p.FlushNativeForExternal(true));
+  assert((p.calls==std::vector<int>{1,2,3}));
+  p={}; assert(p.FlushNativeForExternal(false));
+  assert((p.calls==std::vector<int>{1,3}));
+  for (bool wait : {false,true}) {
+    p={}; p.end_ok=false; assert(!p.FlushNativeForExternal(wait));
+    assert((p.calls==std::vector<int>{1}));
+    p={}; p.begin_ok=false; assert(!p.FlushNativeForExternal(wait));
+  }
+  p={}; p.wait_ok=false; assert(!p.FlushNativeForExternal(true));
+  assert((p.calls==std::vector<int>{1,2}));
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            cpp = Path(directory) / "submission.cpp"
+            exe = Path(directory) / "submission.exe"
+            cpp.write_text(source)
+            compiler = shutil.which("clang++") or shutil.which("g++")
+            self.assertIsNotNone(compiler, "Run in a C++ developer shell")
+            subprocess.run([compiler, "-std=c++20", str(cpp), "-o", str(exe)], check=True)
+            subprocess.run([str(exe)], check=True)
+
     def test_pinned_patch_and_repeat(self):
         with tempfile.TemporaryDirectory() as directory:
             sdk = Path(directory)
@@ -37,6 +76,8 @@ class InteropTests(unittest.TestCase):
             self.assertIn("user_dir = rex::to_path(user_data_cvar)", (sdk / "src/ui/rex_app.cpp").read_text())
             self.assertIn("leaving it unchanged", (sdk / "src/core/cvar.cpp").read_text())
             self.assertIn('row.label = "VR View"', (sdk / FILES[8]).read_text())
+            self.assertIn('"Auto (OpenXR)"', (sdk / FILES[8]).read_text())
+            self.assertIn('In VR, Auto uses OpenXR pacing.', (sdk / FILES[8]).read_text())
             self.assertIn('"skate3_vr_window_feather"};', (sdk / FILES[8]).read_text())
             self.assertIn('edges.label = "VR Window Edges"', (sdk / FILES[8]).read_text())
             self.assertIn('stereo.label = "VR Window Depth"', (sdk / FILES[8]).read_text())

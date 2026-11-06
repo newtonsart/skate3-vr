@@ -35,6 +35,9 @@ REXCVAR_DEFINE_INT32(skate3_native_render_log_interval, 0, "Skate 3",
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 REXCVAR_DECLARE(bool, skate3_native_render_scene_perf_log);
 REXCVAR_DECLARE(bool, skate3_native_render_scene_occlusion_cull_guest);
+#if SKATE3_HAS_OPENXR
+REXCVAR_DECLARE(bool, skate3_vr);
+#endif
 REXCVAR_DEFINE_DOUBLE(skate3_guest_fps_cap, 0.0, "Skate 3",
                       "Pace the guest render loop to this frame rate (0 = uncapped). The "
                       "guest produces frames at irregular 2-9 ms intervals; the display "
@@ -59,7 +62,7 @@ REXCVAR_DEFINE_BOOL(skate3_guest_fps_cap_auto, true, "Skate 3",
                     "jitter: presents run with tearing allowed, so a present "
                     "landing inside the panel's minimum refresh period tears even "
                     "under VRR. Overrides skate3_guest_fps_cap while the display "
-                    "refresh is known.")
+                    "refresh is known. In VR, Auto leaves pacing to OpenXR instead.")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 namespace skate3::native_scene {
@@ -265,12 +268,19 @@ void OnClothDraw(uint8_t* base, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t 
 void PaceGuestFrame() {
   double cap = REXCVAR_GET(skate3_guest_fps_cap);
   if (REXCVAR_GET(skate3_guest_fps_cap_auto)) {
-    // Refresh-derived cap (see the cvar). Falls through to the explicit cap
-    // while the platform hasn't reported a refresh rate.
-    const double auto_cap = double(rex::ui::Window::AutoFrameCapHz(
-        rex::ui::Window::CachedDisplayRefreshHz()));
-    if (auto_cap > 0.0) {
-      cap = auto_cap;
+#if SKATE3_HAS_OPENXR
+    // OpenXR paces VR; the desktop monitor's VRR limit beats against the headset.
+    if (REXCVAR_GET(skate3_vr)) {
+      cap = 0.0;
+    } else
+#endif
+    {
+      // Keep the explicit cap until the desktop refresh is known.
+      const double auto_cap = double(rex::ui::Window::AutoFrameCapHz(
+          rex::ui::Window::CachedDisplayRefreshHz()));
+      if (auto_cap > 0.0) {
+        cap = auto_cap;
+      }
     }
   }
   static std::chrono::steady_clock::time_point s_next{};

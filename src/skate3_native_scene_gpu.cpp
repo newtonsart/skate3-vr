@@ -5160,13 +5160,23 @@ void ProcessPrewarmEntry(uint8_t* base, const PrewarmEntry& e) {
   // BuildItemFromMesh takes its own guarded header copy for the same reason.
   uint8_t record[0x60];
   DrawItem item{};
-  const bool record_ok =
-      e.mesh >= 0x10000 && GuestTryCopy(record, base + e.mesh, sizeof(record));
+  const auto record_u32 = [&record](uint32_t off) {
+    uint32_t v;
+    std::memcpy(&v, record + off, sizeof(v));
+    return __builtin_bswap32(v);
+  };
+  // Speculative registrations may still contain file offsets, not fixed-up
+  // pointers. Check guest allocations without the OS VirtualQuery/VAD lock.
+  const bool record_ok = GuestMetadataReadable(e.mesh, sizeof(record)) &&
+      GuestTryCopy(record, base + e.mesh, sizeof(record)) &&
+      GuestMetadataReadable(record_u32(0x28), 12) &&
+      GuestMetadataReadable(record_u32(0x30), 0x24) &&
+      GuestMetadataReadable(record_u32(0x34), 0x24);
   if (!record_ok) {
     const uint64_t n = g_prewarm_unreadable.fetch_add(1, std::memory_order_relaxed) + 1;
     if (g_prewarm_unreadable_log_budget.load(std::memory_order_relaxed) > 0 &&
         g_prewarm_unreadable_log_budget.fetch_sub(1, std::memory_order_relaxed) > 0) {
-      REXLOG_INFO("native-scene: prewarm skipped unreadable mesh record {:08X} "
+      REXLOG_INFO("native-scene: prewarm skipped unreadable mesh metadata {:08X} "
                   "(retries left {}, {} unreadable so far)",
                   e.mesh, e.retries, n);
     }
@@ -5201,11 +5211,6 @@ void ProcessPrewarmEntry(uint8_t* base, const PrewarmEntry& e) {
   // unconditionally). The island count (+0x38) and params pointer (+0x44)
   // come from the guarded record snapshot; the params array they point at
   // lives outside it, hence the guarded load.
-  const auto record_u32 = [&record](uint32_t off) {
-    uint32_t v;
-    std::memcpy(&v, record + off, sizeof(v));
-    return __builtin_bswap32(v);
-  };
   const uint32_t num_islands = record_u32(0x38);
   const uint32_t island_params = record_u32(0x44);
   uint32_t prim0 = 0;

@@ -2565,7 +2565,11 @@ bool BuildItemFromMesh(uint8_t* base, uint32_t mesh, DrawItem& item) {
 
   // Payload fingerprint: see ComputeItemFingerprint (the item cache
   // refreshes it on its own cadence).
-  if (!ComputeItemFingerprint(base, item)) {
+  // Registration can expose initialized buffer objects with unfixed payload pointers.
+  if (!GuestMetadataReadable(item.vb_addr, item.vb_bytes) ||
+      item.ib_count > UINT32_MAX / 2 ||
+      !GuestMetadataReadable(item.ib_addr, item.ib_count * 2) ||
+      !ComputeItemFingerprint(base, item)) {
     g_rej_geom.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
