@@ -41,6 +41,9 @@
 #include <rex/kernel/guest_presence.h>
 #include <rex/logging.h>
 
+REXCVAR_DEFINE_BOOL(skate3_vr_static_frustum_cull, true, "VR",
+                    "Skip verified static objects outside each eye's expanded frustum").debug_only();
+
 #include "native/skate3_native_diag.h"
 #include "native/character_fade.h"
 #include "native/skate3_native_entity.h"
@@ -240,7 +243,10 @@ bool ReadStableTexWords(uint8_t* base, uint32_t tex_ptr, uint32_t out[6]) {
   for (uint32_t i = 0; i < 6; ++i) {
     out[i] = SwapU32(raw[i]);
   }
-  return true;
+  // Freed objects can contain stable foreign bytes; keep the last good route.
+  if ((out[0] & 3u) != 2u) return false;
+  HostTextureFormat host;
+  return GetHostTextureFormat(static_cast<xenos::TextureFormat>(out[1] & 0x3Fu), host);
 }
 
 // Frames-per-second estimate for the eviction age guards. The LRU clocks
@@ -977,6 +983,7 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
 
   const uint8_t* src_vb = vb_payload;
   uint32_t garbage = 0;
+  bool cull_bounds_valid = true;
   int min_bi = 255;
   int max_bi = -1;
   // Map both upload buffers up front so a Map() failure fails the decode
@@ -1033,6 +1040,9 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
         z < item.bbox_min[2] - 2.f || z > item.bbox_max[2] + 2.f) {
       ++garbage;
     }
+    if (!(x >= item.bbox_min[0] && x <= item.bbox_max[0] &&
+          y >= item.bbox_min[1] && y <= item.bbox_max[1] &&
+          z >= item.bbox_min[2] && z <= item.bbox_max[2])) cull_bounds_valid = false;
     const auto decode_uv = [&](uint32_t fmt, uint32_t offset, float& u, float& w) {
       u = 0.0f;
       w = 0.0f;
@@ -1331,6 +1341,9 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
         item.bbox_max[0], item.bbox_max[1], item.bbox_max[2], item.pos_fmt, item.stride,
         item.vb_addr);
   }
+  out.cull_bounds_valid = cull_bounds_valid;
+  std::memcpy(out.cull_bbox_min, item.bbox_min, sizeof(out.cull_bbox_min));
+  std::memcpy(out.cull_bbox_max, item.bbox_max, sizeof(out.cull_bbox_max));
 
   if (item.cloth_quads) {
     // Quad-list topology with no guest index buffer (live vertex range
@@ -4928,7 +4941,7 @@ void WarmItemResources(const NativeGuestOutputRenderContext& context, uint8_t* b
       return;
     }
     uint32_t words[6];
-    if (!ReadStableTexWords(base, tex_ptr, words) || words[1] == 0) {
+    if (!ReadStableTexWords(base, tex_ptr, words) || (words[1] & 0xFFFFF000u) == 0) {
       return;  // unreadable / mid-rewrite / demoted: the draw path routes it
     }
     const uint64_t key = FetchWordsKey(words);
@@ -5238,7 +5251,7 @@ void ProcessPrewarmEntry(uint8_t* base, const PrewarmEntry& e) {
     // Stable words snapshot: the decode and its store key both come from
     // this snapshot, so a mid-rewrite object can never stage a mixed state.
     uint32_t words[6];
-    if (!ReadStableTexWords(base, tex_ptr, words) || words[1] == 0) {
+    if (!ReadStableTexWords(base, tex_ptr, words) || (words[1] & 0xFFFFF000u) == 0) {
       return;
     }
     const uint64_t wkey = FetchWordsKey(words);
@@ -9465,7 +9478,8 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
       }
       const bool trm = g_trace_mesh_addr != 0 && item.mesh == g_trace_mesh_addr;
       auto rit = g_r.tex_routes.find(tex_ptr);
-      if (!item.retained) {
+      if (!item.retained &&
+          (rit == g_r.tex_routes.end() || rit->second.words_frame != frame_number)) {
         // Route refresh: seqlock-stable read of the live fetch words (a
         // mid-rewrite mixed snapshot must never become a key; it would
         // decode a coherent image of the WRONG memory, the pool-page
@@ -9515,10 +9529,14 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
           } else {
             rit->second.demoted = false;
           }
-        } else if (trm) {
-          REXLOG_INFO("tex-trace: f{} obj={:08X} words UNSTABLE (mid-rewrite)",
-                      frame_number, tex_ptr);
+        } else {
+          // Its old payload may already be recycled; do not heal from it.
+          if (rit != g_r.tex_routes.end()) rit->second.demoted = true;
+          if (trm) REXLOG_INFO("tex-trace: f{} obj={:08X} words UNAVAILABLE (unstable, freed or unreadable)",
+                              frame_number, tex_ptr);
         }
+        // Snapshot shared texture objects once per frame, including both eyes.
+        if (rit != g_r.tex_routes.end()) rit->second.words_frame = frame_number;
       }
       if (rit == g_r.tex_routes.end()) {
         // Unreadable/unstable object with no prior route: nothing safe to
@@ -10913,6 +10931,16 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   // pixels; a large share in either class is a visibility-culling gap, not
   // a scene-density cost.
   const auto timed_draw = [&](const DrawItem& item) {
+#if SKATE3_HAS_OPENXR
+    if (REXCVAR_GET(skate3_vr_static_frustum_cull) && vr_eye && vr_eye->override_camera &&
+        !item.skinned && !item.ropa && !item.cloth_quads && item.bones.empty()) {
+      const auto mesh=g_r.meshes.find(item.mesh);
+      if (mesh!=g_r.meshes.end() && mesh->second.cull_bounds_valid &&
+          std::memcmp(mesh->second.cull_bbox_min,item.bbox_min,sizeof(item.bbox_min))==0 &&
+          std::memcmp(mesh->second.cull_bbox_max,item.bbox_max,sizeof(item.bbox_max))==0 &&
+          ItemOutsideFrustum(item,scene.view_proj,1.2f)) return;
+    }
+#endif
     if (!prof_items) {
       draw_item(item);
       return;

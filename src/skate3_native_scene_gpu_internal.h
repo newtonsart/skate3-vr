@@ -43,6 +43,8 @@ struct IbBinding {
 };
 
 struct MeshBuffers {
+  bool cull_bounds_valid = false;
+  float cull_bbox_min[3]{}, cull_bbox_max[3]{};
   nrhi::Buffer* vb = nullptr;
   nrhi::Buffer* ib = nullptr;
   VbBinding vb_view{};
@@ -1146,6 +1148,7 @@ struct RendererState {
   struct TexRoute {
     uint32_t words[6] = {};
     uint64_t key = 0;
+    uint64_t words_frame = ~uint64_t{0};
     // Live words carry no mip-0 base (streamer demoted the top level; the
     // old pool range is already reused). The route holds the pre-demote
     // state, its cached decode carries the full chain, strictly better,

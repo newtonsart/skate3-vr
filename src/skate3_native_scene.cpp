@@ -10580,9 +10580,7 @@ void BuildFrameScene(uint8_t* base, const SubmitRecord* records, size_t count) {
       g_dyn_retained.clear();
     }
     const uint64_t now = g_guest_frame;
-    std::unordered_set<uint64_t> submitted;
     const size_t published = scene.items.size();
-    submitted.reserve(published);
     for (size_t i = 0; i < published; ++i) {
       const DrawItem& it = scene.items[i];
       if (it.skinned || it.cloth_quads || it.ropa || it.pending ||
@@ -10590,7 +10588,6 @@ void BuildFrameScene(uint8_t* base, const SubmitRecord* records, size_t count) {
         continue;
       }
       const uint64_t key = SynPanItemKey(it);
-      submitted.insert(key);
       if (g_retained_items.size() >= 20000 &&
           g_retained_items.find(key) == g_retained_items.end()) {
         continue;  // growth backstop
@@ -10613,7 +10610,7 @@ void BuildFrameScene(uint8_t* base, const SubmitRecord* records, size_t count) {
     // far beyond the smoothing lag it needs to cover.
     constexpr uint64_t kRetainTtlFrames = 90;
     for (auto rit = g_retained_items.begin(); rit != g_retained_items.end();) {
-      if (submitted.find(rit->first) != submitted.end()) {
+      if (rit->second.last_seen == now) {
         ++rit;
         continue;
       }
