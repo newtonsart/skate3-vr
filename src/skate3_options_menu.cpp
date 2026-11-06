@@ -155,6 +155,7 @@ struct Row {
   std::function<void()> action;    // A activates an option row instead of a selector
   bool rebuild_on_change = false;  // other rows' enabled state depends on it
   bool restart = false;
+  int page = -1;                  // navigation row: destination in g_pages
   std::optional<int> pending;      // restart rows: staged label index
   // Guest string IDs, resolved by the localizer hook.
   uint32_t title_id = 0;
@@ -534,7 +535,35 @@ Page BuildSystemPage(const RestartSettings& settings) {
   return page;
 }
 
-// Pages with rows each get a root row (in spare-id order), then the overlay.
+// The original movie lays out every row at once; long lists need short pages.
+void AddMenuPage(Page page) {
+  if (page.rows.empty()) {
+    return;
+  }
+  constexpr size_t kMaxRows = 8;
+  const size_t per_page = page.rows.size() <= kMaxRows ? kMaxRows : kMaxRows - 2;
+  const size_t count = (page.rows.size() + per_page - 1) / per_page;
+  const int first = static_cast<int>(g_pages.size());
+  g_root_rows.push_back({page.title, 0, first});
+  for (size_t p = 0; p < count; ++p) {
+    Page part{page.title + (count > 1 ? " (" + std::to_string(p + 1) + "/" +
+                                         std::to_string(count) + ")" : "")};
+    const size_t end = std::min((p + 1) * per_page, page.rows.size());
+    for (size_t r = p * per_page; r < end; ++r) {
+      part.rows.push_back(std::move(page.rows[r]));
+    }
+    if (p > 0) {
+      AddRow(part, "Previous page", "Show the previous settings page.")->page =
+          first + static_cast<int>(p) - 1;
+    }
+    if (p + 1 < count) {
+      AddRow(part, "Next page", "Show more settings.")->page = first + static_cast<int>(p) + 1;
+    }
+    g_pages.push_back(std::move(part));
+  }
+}
+
+// Categories each keep one root row (in spare-id order), then the overlay.
 void BuildMenu() {
   RestartSettings settings;
   for (auto& setting : rex::ui::GetRestartSettings()) {
@@ -543,11 +572,7 @@ void BuildMenu() {
   }
   for (Page page : {BuildDisplayPage(settings), BuildGraphicsPage(settings), BuildViewPage(),
                     BuildControlsPage(settings), BuildSystemPage(settings)}) {
-    if (page.rows.empty()) {
-      continue;
-    }
-    g_root_rows.push_back({page.title, 0, static_cast<int>(g_pages.size())});
-    g_pages.push_back(std::move(page));
+    AddMenuPage(std::move(page));
   }
   g_root_rows.push_back({"All PC Settings", 0, kOverlayPage});
   g_root_rows.push_back({"Quit Game", 0, kQuitPage});
@@ -795,7 +820,7 @@ int SteppedIndex(int shown, int delta, int count) {
 // Live rows apply and save immediately; restart rows only stage the choice.
 // A row without labels has nothing to step to: no sound, no change.
 bool StepRow(PPCContext& ctx, uint8_t* base, uint32_t state, Row& row, int delta) {
-  if (row.action) {
+  if (row.action || row.page >= 0) {
     return false;
   }
   const int index = SteppedIndex(ShownIndex(row), delta, static_cast<int>(row.labels.size()));
@@ -1079,7 +1104,9 @@ void Install() {
   g_installed.store(true, std::memory_order_release);
   size_t rows = 0;
   for (const Page& page : g_pages) {
-    rows += page.rows.size();
+    rows += std::count_if(page.rows.begin(), page.rows.end(), [](const Row& row) {
+      return row.page < 0;
+    });
   }
   REXLOG_INFO("Options menu: {} PC settings rows ({} pages, {} settings) added to the root "
               "Options screen",
@@ -1167,7 +1194,13 @@ extern "C" REX_FUNC(sub_8260D290) {
     const uint32_t state = ctx.r3.u32;
     if (Page* page = PageOf(base, state)) {
       Row* row = RowAt(*page, ctx.r5.u32);
-      if (row && row->action && RowEnabled(*row)) {
+      if (row && row->page >= 0 && RowEnabled(*row)) {
+        const uint32_t screen = kFirstPageScreen + static_cast<uint32_t>(row->page);
+        REX_STORE_U32(state + kStateScreenOffset, screen);
+        REX_STORE_U32(state + kStateRowOffset, 0);
+        PlaySound(ctx, base, kSubmenuSound);
+        RefreshScreen(ctx, base, state, kRefreshScreen);
+      } else if (row && row->action && RowEnabled(*row)) {
         PlaySound(ctx, base, kSubmenuSound);
         row->action();
       }
@@ -1295,13 +1328,14 @@ extern "C" REX_FUNC(sub_825A6F70) {
   __imp__sub_825A6F70(ctx, base);
 }
 
-// GameSettings_GetOptionType(row): editor/recenter actions use the game's option widget.
+// GameSettings_GetOptionType(row): actions and page links use the option widget.
 extern "C" REX_FUNC(sub_825A6CE0) {
   if (IsInstalled()) {
     ArgRegisters args(ctx);
     if (Page* page = PageOf(base, OptionsState(ctx, base))) {
       const Row* row = RowAt(*page, static_cast<uint32_t>(AptArgInt(ctx, base, 0)));
-      AptReturnString(ctx, base, row && row->action ? g_type_option : g_type_selector);
+      AptReturnString(ctx, base,
+                      row && (row->action || row->page >= 0) ? g_type_option : g_type_selector);
       return;
     }
     args.Restore();
@@ -1365,7 +1399,9 @@ extern "C" REX_FUNC(sub_825A6FE0) {
     const uint32_t state = OptionsState(ctx, base);
     if (Page* page = PageOf(base, state)) {
       const Row* row = RowAt(*page, REX_LOAD_U32(state + kStateRowOffset));
-      AptReturnString(ctx, base, row && row->action && RowEnabled(*row) ? kStringSelect : kStringEmpty);
+      AptReturnString(ctx, base,
+                      row && (row->action || row->page >= 0) && RowEnabled(*row)
+                          ? kStringSelect : kStringEmpty);
       return;
     }
     args.Restore();

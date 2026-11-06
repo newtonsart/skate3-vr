@@ -55,9 +55,12 @@ bool HasCvar(std::string_view name) { return flags.contains(std::string(name)); 
 std::function<void()> g_open_settings;
 '''
 harness += section("struct Row {", "// A row we add to the root")
+harness += section("// A row we add to the root", "std::atomic<bool> g_installed")
+harness += "\nstd::vector<Page> g_pages;\nstd::vector<RootRow> g_root_rows;\n"
 harness += section("int NearestIndex(", "bool HasPendingRestart()")
 harness += section("Row* AddRow(", "// The overlay's restart-applied")
 harness += section("void AddVrRows(", "Page BuildViewPage()")
+harness += section("void AddMenuPage(", "// Categories each keep")
 harness += r'''
 struct PPCContext {};
 int saved = 0;
@@ -125,7 +128,54 @@ harness += '\nint main() {\n' + declarations + r'''
   assert(saved == 1 && rex::cvar::Query<double>("skate3_vr_render_scale") == 0);
   assert(StepRow(context, nullptr, 0, row("VR Render Resolution"), -1));
   assert(saved == 2 && rex::cvar::Query<double>("skate3_vr_render_scale") == 1.25);
-  puts("PASS: native VR rows, ranges, mode gating and editor actions");
+  for (int count : {0, 1, 8, 9, 25, 36}) {
+    g_pages.clear();
+    g_root_rows.clear();
+    Page long_page{"View"};
+    for (int i = 0; i < count; ++i) {
+      Row r;
+      r.title = std::to_string(i);
+      r.get = [i] { return i; };
+      r.pending = i;
+      long_page.rows.push_back(std::move(r));
+    }
+    AddMenuPage(std::move(long_page));
+    assert(g_root_rows.size() == (count ? 1 : 0));
+    int visited = 0;
+    for (int p = 0; p < static_cast<int>(g_pages.size()); ++p) {
+      const Page& part = g_pages[p];
+      assert(part.rows.size() <= 8 && !part.rows.empty());
+      bool previous = false, next = false;
+      for (const Row& r : part.rows) {
+        if (r.page >= 0) {
+          assert(r.page >= 0 && r.page < static_cast<int>(g_pages.size()));
+          previous |= r.page == p - 1;
+          next |= r.page == p + 1;
+          assert(!ShownLabel(r));
+        } else {
+          assert(r.title == std::to_string(visited));
+          assert(r.pending == visited && r.get() == visited);
+          ++visited;
+        }
+      }
+      assert(previous == (p > 0));
+      assert(next == (p + 1 < static_cast<int>(g_pages.size())));
+    }
+    assert(visited == count);
+    if (count > 8) {
+      Row& next = g_pages.front().rows.back();
+      assert(next.page == 1 && !StepRow(context, nullptr, 0, next, 1));
+    }
+  }
+  // Pages appended after another category must navigate to absolute page indices.
+  g_pages.clear(); g_root_rows.clear();
+  AddMenuPage(Page{"Empty"});
+  AddMenuPage(std::move(diagnostic));
+  const int view_start = static_cast<int>(g_pages.size());
+  AddMenuPage(std::move(page));
+  assert(g_root_rows.size() == 2 && g_root_rows.back().page == view_start);
+  assert(g_pages[view_start].rows.back().page == view_start + 1);
+  puts("PASS: native VR rows, mode gating, actions and bounded pages with every setting retained");
 }
 '''
 compiler = shutil.which("clang++") or shutil.which("g++")
@@ -137,3 +187,49 @@ with tempfile.TemporaryDirectory() as directory:
     test.write_text(harness, encoding="utf-8")
     subprocess.run([compiler, "-std=c++20", str(test), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
+
+    # Exercise the actual cap selection in builds with and without OpenXR.
+    pacing = (ROOT / "src/skate3_native_render.cpp").read_text(encoding="utf-8")
+    cap_selection = pacing[pacing.index("  double cap =", pacing.index("void PaceGuestFrame()")):
+                           pacing.index("  static std::chrono::steady_clock::time_point s_next")]
+    test.write_text(r'''
+#include <algorithm>
+#include <cassert>
+#include <cmath>
+#include <cstdio>
+double skate3_guest_fps_cap = 0;
+bool skate3_guest_fps_cap_auto = true, skate3_vr = false;
+#define REXCVAR_GET(name) name
+namespace rex::ui {
+struct Window {
+  static inline float refresh = 75;
+  static float CachedDisplayRefreshHz() { return refresh; }
+  static float AutoFrameCapHz(float hz) {
+    return hz < 30 ? 0 : std::floor(hz - std::max(4.0f, hz * 0.05f));
+  }
+};
+}
+double Cap() {
+''' + cap_selection + r'''
+  return cap;
+}
+int main() {
+  assert(Cap() == 71);
+  skate3_vr = true;
+  assert(Cap() == (SKATE3_HAS_OPENXR ? 0 : 71));
+  skate3_guest_fps_cap = 60;
+  assert(Cap() == (SKATE3_HAS_OPENXR ? 0 : 71));
+  skate3_guest_fps_cap_auto = false;
+  assert(Cap() == 60);
+  skate3_guest_fps_cap = 0;
+  assert(Cap() == 0);
+  skate3_vr = false; skate3_guest_fps_cap_auto = true;
+  rex::ui::Window::refresh = 0; skate3_guest_fps_cap = 90;
+  assert(Cap() == 90);
+  puts("PASS: VR Auto bypasses the desktop cap; explicit limits and desktop fallback work");
+}
+''', encoding="utf-8")
+    for openxr in (0, 1):
+        subprocess.run([compiler, "-std=c++20", f"-DSKATE3_HAS_OPENXR={openxr}",
+                        str(test), "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
