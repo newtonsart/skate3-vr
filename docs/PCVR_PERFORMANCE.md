@@ -363,3 +363,28 @@ separating resources currently rewritten/reused between eyes; no completion
 fence was removed. See the outer workspace's `out/wait-profile-results-20261106.md`
 and `.json`. Only the separate candidate is updated; its prior build is kept
 in before-wait-overlap. XMA errors remain unresolved.
+
+## Real Quest 3 scene-density test (2026-11-06 evening)
+
+The user ran the candidate in immersive mode on Quest 3/Oculus from 21:59 to
+22:05. Large-scene gameplay windows show a strong association between captured
+item count and submission cadence. Before local compiler checks began, median
+rates for 1000–1499/1500–1999/2000–2499 captured items were 119.33/110.01/71.99
+submissions/s (14/39/21 windows of 120 samples). Three windows above 2500 items
+had median 59.95/s. Captured items are not a count of visible objects or draws.
+
+Across the broader selection excluding the main local build, fast and slow
+windows had median GPU-render maxima of 1.00/1.07 ms versus CPU-render maxima
+of 4.65/6.11 ms. This points toward per-item CPU preparation, rather than the
+measured native GPU drawing alone. These independent window maxima cannot be
+added as one frame. Sampled pairs had median XR image acquire/wait of 0.006 ms:
+early submission cannot save much image-wait time in those samples. Further
+completion waits still protect resources reused between eyes.
+
+The logs do not identify the reported red skatepark or distinguish a head-only
+turn from a game-camera turn at that point. This is not a matched opposite-view
+comparison and does not prove an FPS gain over previous builds. GPU compositor
+costs are not fully covered. Twelve XMA errors remained; no texture decode
+failures or access violations were logged. No sustained 120 FPS claim is made.
+Full local results and exclusions are in the outer workspace's
+`out/user-view-load-results-20261106.md` and `.json`.
