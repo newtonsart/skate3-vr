@@ -11,9 +11,12 @@
 #include <rex/logging.h>
 #include <rex/cvar.h>
 #include <filesystem>
+#include <chrono>
 #include <fstream>
 #include <memory>
 #include <stdexcept>
+#include <imgui_internal.h>
+#include <cmath>
 
 namespace skate3::vr {
 namespace {
@@ -34,6 +37,7 @@ struct Surface {
   std::unique_ptr<rex::ui::vulkan::VulkanUIDrawContext> context;
   bool pending=false,ready=false,failed=false,captured=false;
   uint32_t completed_frames=0;
+  std::chrono::steady_clock::time_point last_fps_paint{};
   void Capture() {
     if (captured || completed_frames<30 || !rex::cvar::Query<bool>("skate3_vr_settings_test")) return;
     captured=true;
@@ -85,6 +89,13 @@ struct Surface {
       for (size_t i=0;i<rgb.size()/3;++i) {
         rgb[i*3]=char(source[i*4+(format==VK_FORMAT_B8G8R8A8_UNORM?2:0)]);
         rgb[i*3+1]=char(source[i*4+1]); rgb[i*3+2]=char(source[i*4+(format==VK_FORMAT_B8G8R8A8_UNORM?0:2)]);
+      }
+      if (image.fps_only) {
+        size_t transparent=0;
+        for (size_t i=0;i<rgb.size()/3;++i) transparent+=source[i*4+3]==0;
+        const auto& b=image.fps_region;
+        REXLOG_INFO("VR: FPS capture bounds {},{} {}x{}; transparent pixels {}/{}",
+            b.x,b.y,b.width,b.height,transparent,rgb.size()/3);
       }
       vkUnmapMemory(device,host);
       std::filesystem::create_directories("out"); std::ofstream file("out/vr-settings.ppm",std::ios::binary);
@@ -180,7 +191,7 @@ void Submitted(void*,VkFence fence,VkResult result) {
     }
   }
   surface.ready=result==VK_SUCCESS;
-  if (surface.ready) { ++surface.completed_frames; surface.Capture(); }
+  if (surface.ready) { surface.image.generation=++surface.completed_frames; surface.Capture(); }
   if (!surface.ready) {
     surface.failed=true;
     REXLOG_ERROR("VR: settings submission failed: Vk {}",int(result));
@@ -197,9 +208,13 @@ void ShutdownSettingsSurface() {
   std::lock_guard lock(surface.mutex);
   surface.Destroy(); surface.gpu=nullptr; surface.failed=false;
 }
-rex::ui::UIDrawContext* BeginSettingsSurface(rex::ui::UIDrawContext& desktop,bool system_dialog) {
+rex::ui::UIDrawContext* BeginSettingsSurface(rex::ui::UIDrawContext& desktop,bool system_dialog,bool fps_only) {
   surface.painting=std::unique_lock(surface.mutex);
   if (surface.failed) { surface.painting.unlock(); return nullptr; }
+  const auto now=std::chrono::steady_clock::now();
+  if (fps_only && now-surface.last_fps_paint<std::chrono::milliseconds(250)) {
+    surface.painting.unlock(); return nullptr;
+  }
   try {
     if (!desktop.presenter_or_null()) { surface.painting.unlock(); return nullptr; }
     auto& original=static_cast<rex::ui::vulkan::VulkanUIDrawContext&>(desktop);
@@ -207,15 +222,34 @@ rex::ui::UIDrawContext* BeginSettingsSurface(rex::ui::UIDrawContext& desktop,boo
     surface.gpu=presenter.vulkan_device();
     const auto width=desktop.render_target_width(),height=desktop.render_target_height();
     if (!width || !height) { surface.painting.unlock(); return nullptr; }
+    FpsPanelLayout fps_region;
+    if (fps_only) {
+      const auto* window=ImGui::FindWindowByName("##fps_overlay");
+      if (!window || !window->Active) { surface.painting.unlock(); return nullptr; }
+      const auto display=ImGui::GetIO().DisplaySize;
+      if (display.x<=0 || display.y<=0) { surface.painting.unlock(); return nullptr; }
+      const auto pixel=[](float value,uint32_t limit) {
+        return uint32_t(std::clamp(value,0.f,float(limit)));
+      };
+      const auto x=pixel(std::floor(window->Pos.x*width/display.x),width);
+      const auto y=pixel(std::floor(window->Pos.y*height/display.y),height);
+      const auto right=pixel(std::ceil((window->Pos.x+window->Size.x)*width/display.x),width);
+      const auto bottom=pixel(std::ceil((window->Pos.y+window->Size.y)*height/display.y),height);
+      if (right<=x || bottom<=y) { surface.painting.unlock(); return nullptr; }
+      fps_region={x,y,right-x,bottom-y};
+    }
     if (surface.image.width!=width || surface.image.height!=height || surface.format!=original.render_pass_format())
       surface.Create(width,height,original.render_pass_format());
     surface.image.system_dialog=system_dialog;
-    surface.image.editor_mode=system_dialog ? 0 : VrEditorPanelMode();
+    surface.image.fps_only=fps_only;
+    surface.image.fps_region=fps_region;
+    surface.image.editor_mode=system_dialog || fps_only ? 0 : VrEditorPanelMode();
     Check(vkResetCommandBuffer(surface.command,0),"Reset VR settings commands");
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     Check(vkBeginCommandBuffer(surface.command,&begin),"Begin VR settings commands");
     VkClearValue clear{}; clear.color={{0.02f,0.025f,0.03f,1}};
+    if (fps_only) clear.color={{0,0,0,0}};
     VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     pass.renderPass=surface.pass; pass.framebuffer=surface.framebuffer;
     pass.renderArea.extent={width,height}; pass.clearValueCount=1; pass.pClearValues=&clear;
@@ -223,6 +257,7 @@ rex::ui::UIDrawContext* BeginSettingsSurface(rex::ui::UIDrawContext& desktop,boo
     surface.context=std::make_unique<rex::ui::vulkan::VulkanUIDrawContext>(*desktop.presenter_or_null(),width,height,
         surface.command,original.submission_index_current(),original.submission_index_completed(),
         surface.pass,surface.format);
+    if (fps_only) surface.last_fps_paint=now;
     return surface.context.get();
   } catch (const std::exception& error) {
     surface.failed=true; surface.ready=false;

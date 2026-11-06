@@ -10,6 +10,7 @@
 #include "openxr_session.h"
 #include "openxr_gamepad.h"
 #include "controller_driver.h"
+#include "simulated_route.h"
 #include "openxr_passthrough.h"
 #include "settings_surface.h"
 #include "editor_controls.h"
@@ -77,8 +78,10 @@ REXCVAR_DEFINE_BOOL(skate3_vr_share_frame_work, true, "VR", "Share the scene cop
 REXCVAR_DEFINE_BOOL(skate3_vr_gpu_timing, false, "VR", "Measure GPU render and transfer times per eye")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(skate3_vr_perf_trace, false, "VR", "Log periodic VR frame timing summaries");
-REXCVAR_DEFINE_BOOL(skate3_vr_compare_frame_work, false, "VR", "Log 600 alternating separate/shared-work samples; desktop camera if XR is inactive")
+REXCVAR_DEFINE_BOOL(skate3_vr_compare_frame_work, false, "VR", "Compare separate/shared eye rendering; simulated eyes without a headset when skate3_vr=false")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(skate3_vr_simulate_route, false, "VR", "Drive a 90 second test route during the no-headset rendering benchmark")
+    .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace skate3::vr {
 namespace {
@@ -109,6 +112,16 @@ struct State {
   int last_mode=-1;
   bool settings_presented=false;
   bool settings_dialog=false;
+  bool settings_fps_only=false;
+  uint32_t settings_generation=0;
+  FpsPanelLayout fps_crop;
+  std::shared_ptr<native_scene::FrameScene> scene_copy;
+  std::shared_ptr<native_scene::FrameScene> CopyScene(const native_scene::FrameScene& source) {
+    // Both eyes finish before the next copy; retain nested vector capacity.
+    if (!scene_copy) scene_copy=std::make_shared<native_scene::FrameScene>();
+    *scene_copy=source;
+    return scene_copy;
+  }
   int settings_editor=0;
   float settings_aspect=16.0f/9;
   double render_scale=-1;
@@ -131,7 +144,11 @@ struct State {
   uint32_t timestamp_bits=0;
   float timestamp_period=0;
   double gpu_render_ms[2]{-1,-1},gpu_copy_ms[2]{-1,-1};
+  double transfer_submit_ms[3]{},transfer_image_ms[3]{},transfer_fence_ms[3]{};
   uint32_t perf_samples=0;
+  std::chrono::steady_clock::time_point route_start{};
+  int route_log_second=-1;
+  bool route_finished=false;
   PerfTrace trace;
   std::chrono::steady_clock::time_point trace_last_submit{};
   VkDescriptorSetLayout color_layout=VK_NULL_HANDLE;
@@ -178,6 +195,23 @@ struct State {
       controllers.reset();
       room.reset();
       session.reset();
+    }
+  }
+  void InitializeTiming() {
+    if (REXCVAR_GET(skate3_vr_gpu_timing) || REXCVAR_GET(skate3_vr_compare_frame_work)) {
+      uint32_t families=0; vkGetPhysicalDeviceQueueFamilyProperties(gpu->physical_device(),&families,nullptr);
+      std::vector<VkQueueFamilyProperties> properties(families);
+      vkGetPhysicalDeviceQueueFamilyProperties(gpu->physical_device(),&families,properties.data());
+      timestamp_bits=properties.at(gpu->queue_family_graphics_compute()).timestampValidBits;
+      VkPhysicalDeviceProperties device_properties;
+      vkGetPhysicalDeviceProperties(gpu->physical_device(),&device_properties);
+      timestamp_period=device_properties.limits.timestampPeriod;
+      VkQueryPoolCreateInfo queries{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+      queries.queryType=VK_QUERY_TYPE_TIMESTAMP; queries.queryCount=8;
+      if (!timestamp_bits || vkCreateQueryPool(device,&queries,nullptr,&timing)!=VK_SUCCESS) {
+        timing=VK_NULL_HANDLE;
+        REXLOG_WARN("VR: GPU timestamp timing unavailable");
+      }
     }
   }
   void Bind(rex::ui::vulkan::VulkanDevice* graphics) {
@@ -243,21 +277,7 @@ struct State {
     alloc.commandPool=pool; alloc.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY; alloc.commandBufferCount=1;
     VkCheck(vkAllocateCommandBuffers(device,&alloc,&command),"Allocate XR transfer commands");
     VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; VkCheck(vkCreateFence(device,&fi,nullptr,&fence),"Create XR transfer fence");
-    if (REXCVAR_GET(skate3_vr_gpu_timing) || REXCVAR_GET(skate3_vr_compare_frame_work)) {
-      uint32_t families=0; vkGetPhysicalDeviceQueueFamilyProperties(gpu->physical_device(),&families,nullptr);
-      std::vector<VkQueueFamilyProperties> properties(families);
-      vkGetPhysicalDeviceQueueFamilyProperties(gpu->physical_device(),&families,properties.data());
-      timestamp_bits=properties.at(gpu->queue_family_graphics_compute()).timestampValidBits;
-      VkPhysicalDeviceProperties device_properties;
-      vkGetPhysicalDeviceProperties(gpu->physical_device(),&device_properties);
-      timestamp_period=device_properties.limits.timestampPeriod;
-      VkQueryPoolCreateInfo queries{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-      queries.queryType=VK_QUERY_TYPE_TIMESTAMP; queries.queryCount=8;
-      if (!timestamp_bits || vkCreateQueryPool(device,&queries,nullptr,&timing)!=VK_SUCCESS) {
-        timing=VK_NULL_HANDLE;
-        REXLOG_WARN("VR: GPU timestamp timing unavailable");
-      }
-    }
+    InitializeTiming();
     VkDescriptorSetLayoutBinding bindings[2]{};
     bindings[0]={0,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr};
     bindings[1]={1,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr};
@@ -326,62 +346,117 @@ struct State {
   bool BenchmarkDesktop(const NativeGuestOutputRenderContext& input,
                         std::shared_ptr<const native_scene::FrameScene> scene,
                         NativeGuestOutputRenderer render) {
-    if (!REXCVAR_GET(skate3_vr_compare_frame_work) || !timing || perf_samples>=600 ||
+    const bool route=REXCVAR_GET(skate3_vr_simulate_route) && !REXCVAR_GET(skate3_vr);
+    if (!REXCVAR_GET(skate3_vr_compare_frame_work) || !timing || (!route && perf_samples>=600) ||
         !scene || scene->generation<=300 || scene->items.size()<=100)
       return render(input,nullptr);
-    // Duplicate the desktop camera to measure actual GPU work without a worn
-    // headset. This is not a headset frame-rate or stereo-visual validation.
+    if (route) {
+      if (rex::kernel::guest_presence::GameplayContextValue()!=1) {
+        PublishVrControls({});
+        return render(input,nullptr);
+      }
+      const auto now=std::chrono::steady_clock::now();
+      if (!route_start.time_since_epoch().count()) route_start=now;
+      const double seconds=std::chrono::duration<double>(now-route_start).count();
+      PublishVrControls(SimulatedRouteControls(seconds));
+      if (seconds>=kSimulatedRouteSeconds) {
+        if (!route_finished) REXLOG_INFO("VR simulated route complete: samples={}",perf_samples);
+        route_finished=true;
+        return render(input,nullptr);
+      }
+      if (int(seconds)!=route_log_second) {
+        route_log_second=int(seconds);
+        const auto player=std::find_if(scene->items.begin(),scene->items.end(),[](const auto& item) {
+          return item.char_family==2 && item.bones.size()>=12;
+        });
+        REXLOG_INFO("VR simulated route: second={} camera=({:.2f},{:.2f},{:.2f}) player-known={} player=({:.2f},{:.2f},{:.2f}) items={}",
+            route_log_second,scene->cam_pos[0],scene->cam_pos[1],scene->cam_pos[2],player!=scene->items.end(),
+            player!=scene->items.end()?player->bones[3]:0,
+            player!=scene->items.end()?player->bones[7]:0,
+            player!=scene->items.end()?player->bones[11]:0,scene->items.size());
+      }
+    }
+    // Without XR use recorded eye views; the XR-idle fallback duplicates the desktop camera.
+    // Neither path measures compositor work or headset frame rate.
     auto context=input;
     const auto image=vulkan::NativeRhiGetImage(input.guest_output);
     StereoShadows shadows;
     const bool share=perf_samples%2==0;
-    double cpu_ms=0,copy_ms=0,gpu_ms=0;
+    double cpu_ms=0,copy_ms=0,gpu_ms=0,begin_ms=0,flush_ms=0,query_ms=0;
     const auto copy_start=std::chrono::steady_clock::now();
-    auto render_scene=share ? std::make_shared<native_scene::FrameScene>(*scene) : nullptr;
+    auto render_scene=share ? CopyScene(*scene) : nullptr;
     if (share) cpu_ms=copy_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-copy_start).count();
     for (int eye=0;eye<2;++eye) {
-      if (eye) context.cmd=vulkan::NativeRhiBeginFrame(context.device,image.image,image.view,true,
-          context.guest_output_width,context.guest_output_height,&context.guest_output);
+      if (eye) {
+        const auto begin_start=std::chrono::steady_clock::now();
+        context.cmd=vulkan::NativeRhiBeginFrame(context.device,image.image,image.view,true,
+            context.guest_output_width,context.guest_output_height,&context.guest_output);
+        begin_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin_start).count();
+      }
       EyeCamera camera; camera.scene=scene; camera.eye_index=eye;
       camera.render_scene=render_scene;
       camera.override_camera=true; camera.shadows=share?&shadows:nullptr;
       std::copy(scene->view_proj,scene->view_proj+16,camera.view_proj);
       std::copy(scene->proj,scene->proj+16,camera.proj);
       std::copy(scene->cam_pos,scene->cam_pos+3,camera.position);
+      if (!REXCVAR_GET(skate3_vr)) {
+        // Recorded Quest FOV with nominal 64 mm IPD; no compositor or Link work.
+        XrView view{XR_TYPE_VIEW};
+        view.pose.orientation.w=1;
+        view.pose.position.x=eye ? 0.032f : -0.032f;
+        view.fov={eye ? -0.6981f : -0.9425f,eye ? 0.9425f : 0.6981f,0.7679f,-0.9599f};
+        XrPosef reference{}; reference.orientation.w=1;
+        MakeEyeCamera(scene->view_proj,scene->proj,scene->cam_pos,reference,view,
+            float(REXCVAR_GET(skate3_vr_world_scale)),camera.view_proj,camera.proj,camera.position,
+            float(REXCVAR_GET(skate3_vr_camera_distance)),float(REXCVAR_GET(skate3_vr_camera_height)));
+      }
       const auto start=std::chrono::steady_clock::now();
       vulkan::NativeRhiTimestamp(context.device,timing,eye*2,true);
       const bool rendered=render(context,&camera);
       vulkan::NativeRhiTimestamp(context.device,timing,eye*2+1,false);
       cpu_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
       copy_ms+=camera.scene_copy_ms;
+      const auto flush_start=std::chrono::steady_clock::now();
       if (!vulkan::NativeRhiFlushForExternal(context.device)) throw std::runtime_error("Benchmark GPU submission failed");
+      flush_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-flush_start).count();
       if (!rendered || !camera.override_camera) return rendered;
+      const auto query_start=std::chrono::steady_clock::now();
       const double duration=ReadGpuDuration(eye*2);
+      query_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-query_start).count();
       if (duration<0) return rendered;
       gpu_ms+=duration;
     }
     const auto release_start=std::chrono::steady_clock::now();
     render_scene.reset();
     cpu_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-release_start).count();
-    REXLOG_INFO("VR perf sample: mode={} display=desktop items={} CPU-render={:.4f} CPU-scene-copy={:.4f} GPU-render={:.4f} GPU-copy=-1",
-        share?"shared":"separate",scene->items.size(),cpu_ms,copy_ms,gpu_ms);
-    if (++perf_samples==600) REXLOG_INFO("VR: desktop shared-work comparison complete (600 samples)");
+    const double pair_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-copy_start).count();
+    REXLOG_INFO("VR perf sample: mode={} display={} items={} CPU-render={:.4f} CPU-scene-copy={:.4f} GPU-render={:.4f} GPU-copy=-1 pair-total={:.4f} CPU-begin={:.4f} CPU-flush={:.4f} CPU-query={:.4f}",
+        share?"shared":"separate",REXCVAR_GET(skate3_vr)?"desktop":"simulated",scene->items.size(),cpu_ms,copy_ms,gpu_ms,pair_ms,begin_ms,flush_ms,query_ms);
+    if (++perf_samples==600 && !route) REXLOG_INFO("VR: desktop shared-work comparison complete (600 samples)");
     return true;
   }
   void Transfer(const NativeGuestOutputRenderContext& context,int e,bool capture,const SettingsImage* settings=nullptr,
                 float feather=0,float aspect=1,WindowPointer pointer={}) {
     auto& eye=eyes[e]; uint32_t index=0;
     const bool profile=timing && e<2;
-    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    {
-      auto queue=gpu->AcquireQueue(gpu->queue_family_graphics_compute(),0);
-      XrCheck(xrAcquireSwapchainImage(eye.handle,&acquire,&index),"Acquire eye image");
-    }
-    bool waited=false;
+    bool waited=false,native_pending=false;
     try {
+      const auto submit_start=std::chrono::steady_clock::now();
+      // Render to our own image while XR waits for a compositor-owned image.
+      if (!settings) {
+        if (!vulkan::NativeRhiFlushForExternal(context.device,false)) throw std::runtime_error("Game GPU submission failed");
+        native_pending=true;
+      }
+      const auto image_start=std::chrono::steady_clock::now();
+      transfer_submit_ms[e]=std::chrono::duration<double,std::milli>(image_start-submit_start).count();
+      XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+      {
+        auto queue=gpu->AcquireQueue(gpu->queue_family_graphics_compute(),0);
+        XrCheck(xrAcquireSwapchainImage(eye.handle,&acquire,&index),"Acquire eye image");
+      }
       XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO}; wait.timeout=XR_INFINITE_DURATION;
       XrCheck(xrWaitSwapchainImage(eye.handle,&wait),"Wait eye image"); waited=true;
-      if(!vulkan::NativeRhiFlushForExternal(context.device)) throw std::runtime_error("Game GPU submission failed");
+      transfer_image_ms[e]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-image_start).count();
       if(capture) PrepareCapture(VkDeviceSize(context.guest_output_width)*context.guest_output_height*4);
       auto image=settings ? vulkan::NativeVulkanImage{settings->image,settings->view} : vulkan::NativeRhiGetImage(context.guest_output);
       const uint32_t source_width=settings ? settings->width : context.guest_output_width;
@@ -417,6 +492,7 @@ struct State {
       vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);
       vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_layout,0,1,&color_set,0,nullptr);
       ColorParameters parameters{uint32_t(linear),feather,aspect,0};
+      parameters.premultiplied=settings && settings->fps_only;
       parameters.pointer_u=pointer.u; parameters.pointer_v=pointer.v;
       parameters.pointer_mode=pointer.hand<0 ? 0 : (pointer.holding ? 2 : 1);
       vkCmdPushConstants(command,pipeline_layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(parameters),&parameters);
@@ -457,7 +533,10 @@ struct State {
       VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount=1; submit.pCommandBuffers=&command;
       { auto queue=gpu->AcquireQueue(gpu->queue_family_graphics_compute(),0); VkCheck(vkQueueSubmit(queue.queue(),1,&submit,fence),"Submit XR transfer"); }
       // Correctness baseline: all writes finish before handing ownership to XR.
+      const auto fence_start=std::chrono::steady_clock::now();
       VkCheck(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"Complete XR transfer");
+      native_pending=false;
+      transfer_fence_ms[e]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-fence_start).count();
       if (profile) {
         gpu_render_ms[e]=ReadGpuDuration(e*2);
         gpu_copy_ms[e]=ReadGpuDuration(4+e*2);
@@ -473,6 +552,10 @@ struct State {
       }
       waited=false;
     } catch(...) {
+      // Early submission may still use the buffers the mono fallback rewrites.
+      if (native_pending) {
+        try { vulkan::NativeRhiFlushForExternal(context.device); } catch(...) {}
+      }
       if(waited) {
         auto queue=gpu->AcquireQueue(gpu->queue_family_graphics_compute(),0);
         XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -522,9 +605,16 @@ void InitializeGameVr() {
     const auto extent=EyeRenderExtent(2272,2464,REXCVAR_GET(skate3_vr_render_scale));
     vulkan::NativeRhiSetOutputSizeOverride(extent.width,extent.height);
     REXLOG_INFO("VR resolution diagnostic: desktop-only {}x{}, no headset/session validation",extent.width,extent.height);
+    if (!REXCVAR_GET(skate3_vr_compare_frame_work)) return;
+  }
+  if(!REXCVAR_GET(skate3_vr)) {
+    if (REXCVAR_GET(skate3_vr_compare_frame_work)) {
+      std::lock_guard lock(mutex);
+      state=std::make_unique<State>();
+      REXLOG_INFO("VR: simulated rendering benchmark; no OpenXR runtime or headset pacing");
+    }
     return;
   }
-  if(!REXCVAR_GET(skate3_vr)) return;
   std::lock_guard lock(mutex);
   state=std::make_unique<State>(); state->xr.Initialize(); state->xr.DetectHeadset();
   state->UpdateResolution(true);
@@ -598,6 +688,21 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     std::lock_guard camera_lock(cull_camera_mutex);
     std::copy(scene->cam_pos,scene->cam_pos+3,cull_camera);
     cull_camera_time=std::chrono::steady_clock::now();
+  }
+  if (!REXCVAR_GET(skate3_vr)) {
+    try {
+      if (!s.gpu) {
+        s.gpu=static_cast<rex::ui::vulkan::VulkanDevice*>(vulkan::NativeRhiGetVulkanDevice(input.device));
+        s.device=s.gpu->device();
+        s.InitializeTiming();
+      }
+      return s.BenchmarkDesktop(input,scene,render);
+    } catch (const std::exception& error) {
+      PublishVrControls({});
+      s.failed=true;
+      REXLOG_ERROR("VR: simulated benchmark stopped: {}",error.what());
+      return render(input,nullptr);
+    }
   }
   TrackingFrame frame; bool begun=false;
   try {
@@ -682,8 +787,11 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     PublishVrControls(controls,placing);
     PublishWindowMotion({controls,hands,s.reference,aspect,panel_pose.orientation});
     const bool system_dialog=rex::kernel::xam::xeXamIsUIActive();
-    const bool host_ui=settings_visible.load() || system_dialog;
-    if (!host_ui || system_dialog!=s.settings_dialog) s.settings_presented=false;
+    const bool host_menu=settings_visible.load() || system_dialog;
+    const bool fps_only=!host_menu && rex::cvar::Query<bool>("show_fps_counter");
+    const bool host_ui=host_menu || fps_only;
+    if (!host_ui || system_dialog!=s.settings_dialog || fps_only!=s.settings_fps_only)
+      s.settings_presented=false;
     XrCompositionLayerProjectionView projections[2]={{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
     bool rendered=false,world_rendered=false,eye_world[2]{};
     auto context=input;
@@ -703,7 +811,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     const bool compare=REXCVAR_GET(skate3_vr_compare_frame_work) && s.perf_samples<600;
     const bool share_work=compare ? s.perf_samples%2==0 : REXCVAR_GET(skate3_vr_share_frame_work);
     const auto scene_copy_start=std::chrono::steady_clock::now();
-    auto render_scene=share_work && scene && !photo_flat ? std::make_shared<native_scene::FrameScene>(*scene) : nullptr;
+    auto render_scene=share_work && scene && !photo_flat ? s.CopyScene(*scene) : nullptr;
     const double shared_scene_copy_ms=render_scene ?
         std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-scene_copy_start).count() : 0;
     scene_copy_ms[0]=shared_scene_copy_ms;
@@ -798,10 +906,13 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       if (host_ui) {
         SettingsImage settings;
         auto reading=TryReadSettingsSurface(settings);
-        if (reading && settings.system_dialog==system_dialog) {
+        if (reading && settings.system_dialog==system_dialog && settings.fps_only==fps_only &&
+            (!fps_only || settings.generation!=s.settings_generation)) {
           s.Transfer(context,2,false,&settings);
           s.settings_presented=true; s.settings_editor=settings.editor_mode;
           s.settings_dialog=system_dialog;
+          s.settings_fps_only=fps_only; s.settings_generation=settings.generation;
+          s.fps_crop=FpsPanelCrop(settings.width,settings.height,s.eyes[2].width,s.eyes[2].height,settings.fps_region);
           const auto crop=settings.editor_mode ? EditorPanelRegion(settings.width,settings.height)
               : EditorRegion{0,0,settings.width,settings.height};
           s.settings_aspect=float(crop.width)/crop.height;
@@ -812,7 +923,14 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
           settings_panel.subImage.imageRect.extent={int32_t(s.eyes[2].width),int32_t(s.eyes[2].height)};
           settings_panel.pose.orientation.w=1; settings_panel.pose.position.z=-2;
           settings_panel.size={2.4f,2.4f/s.settings_aspect};
-          if (s.settings_editor) {
+          if (fps_only) {
+            settings_panel.layerFlags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+            settings_panel.subImage.imageRect={{int32_t(s.fps_crop.x),int32_t(s.fps_crop.y)},
+                {int32_t(s.fps_crop.width),int32_t(s.fps_crop.height)}};
+            settings_panel.pose.position={0.55f,0.4f,-2.f};
+            const float width=2.4f*float(s.fps_crop.width)/s.eyes[2].width;
+            settings_panel.size={width,width/s.fps_crop.aspect};
+          } else if (s.settings_editor) {
             const auto crop=EditorPanelRegion(s.eyes[2].width,s.eyes[2].height);
             settings_panel.subImage.imageRect={{int32_t(crop.x),int32_t(crop.y)},
                 {int32_t(crop.width),int32_t(crop.height)}};
@@ -856,6 +974,8 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
         REXLOG_INFO("VR: submitted stereo frame {} scene={} items={} total={:.2f}ms CPU-render L/R={:.2f}/{:.2f}ms GPU-copy/wait L/R={:.2f}/{:.2f}ms",s.submitted,scene?scene->generation:0,scene?scene->items.size():0,ms,render_ms[0],render_ms[1],copy_ms[0],copy_ms[1]);
         if (s.timing) REXLOG_INFO("VR GPU: render L/R={:.3f}/{:.3f}ms transfer L/R={:.3f}/{:.3f}ms CPU-scene-copy L/R={:.3f}/{:.3f}ms shared-work={}",
             s.gpu_render_ms[0],s.gpu_render_ms[1],s.gpu_copy_ms[0],s.gpu_copy_ms[1],scene_copy_ms[0],scene_copy_ms[1],share_work);
+        if (s.timing) REXLOG_INFO("VR transfer CPU: submit L/R={:.3f}/{:.3f}ms image-acquire/wait L/R={:.3f}/{:.3f}ms completion L/R={:.3f}/{:.3f}ms",
+            s.transfer_submit_ms[0],s.transfer_submit_ms[1],s.transfer_image_ms[0],s.transfer_image_ms[1],s.transfer_fence_ms[0],s.transfer_fence_ms[1]);
       }
     } else { s.session->EndFrame(frame); begun=false; }
     if(!rendered && capture_now) rex::cvar::SetFlagByName("skate3_vr_capture_once","true");

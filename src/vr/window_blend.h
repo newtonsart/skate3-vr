@@ -6,7 +6,8 @@
 namespace skate3::vr {
 struct ColorParameters {
   uint32_t decode_color=1;
-  float feather=0,aspect=1,padding=0;
+  float feather=0,aspect=1;
+  uint32_t premultiplied=0;
   float pointer_u=0.5f,pointer_v=0.5f;
   uint32_t pointer_mode=0;
   float pointer_padding=0;

@@ -1,7 +1,10 @@
 # VR settings and pause over the stereo world
 
 VR settings are available directly in the game's **Options → View** page,
-using the original menu's controls, descriptions and scrolling. The mode,
+using the original menu's controls and descriptions. Long categories are split
+into numbered pages with **Previous page** and **Next page** action rows; each
+page contains at most eight rows including navigation. Back returns to the
+Options root. Settings pending a restart survive page changes. The mode,
 resolution, window, camera, HUD and comfort settings apply immediately and
 share the existing settings file. Rows unavailable in the current VR mode
 are disabled. The VR rows appear only in VR runs or the explicit desktop
@@ -17,6 +20,14 @@ The alternative **RB + Start → Video** panel remains available. The OpenXR
 build draws that panel into a Vulkan texture and composes it in the headset,
 with independent eye views behind it. The same surface serves live editors
 and system dialogs.
+
+**FPS Counter** also appears in a small head-relative panel at the upper right
+in all VR modes, using the same option and guest FPS measurement as the desktop
+counter. It follows the widget's actual bounds, with a translucent background
+and transparent surrounding pixels. Turning the option off hides it immediately. The panel refreshes four
+times per second and reuses the existing UI mirror and swapchain; full settings
+and system dialogs retain their usual presentation. It reports game output
+cadence, not the configured headset refresh or compositor-generated frames.
 
 The native VR row changes compile and pass `python cmake/test_vr_options_menu.py`
 (run in a C++ developer shell). Headset navigation and editor transitions

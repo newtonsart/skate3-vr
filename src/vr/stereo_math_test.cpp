@@ -1,4 +1,5 @@
 #include "stereo_math.h"
+#include "simulated_route.h"
 #include "cull_frustum.h"
 #include "gpu_timing.h"
 #include "perf_trace.h"
@@ -34,6 +35,36 @@ int main() {
     Check(trace.frames==1 && trace.slow==0 && trace.repeated==0 && trace.yaw_travel==0);
   }
   using namespace skate3::vr;
+  {
+    Check(!SimulatedRouteControls(-1).connected && !SimulatedRouteControls(90).connected);
+    Check(!SimulatedRouteControls(std::numeric_limits<double>::quiet_NaN()).connected);
+    Check(SimulatedRouteControls(0).a && !SimulatedRouteControls(0.3).a);
+    Check(SimulatedRouteControls(13).stick[0][0]>0 && SimulatedRouteControls(33).stick[0][0]<0);
+    Check(SimulatedRouteControls(25).stick[0][0]==0 && SimulatedRouteControls(89).connected);
+    for (int i=0;i<90;++i) {
+      const auto c=SimulatedRouteControls(i);
+      Check(!c.menu && !c.b && !c.y && !c.x && std::abs(c.stick[0][0])<=1);
+    }
+  }
+  {
+    const auto normal=FpsPanelCrop(1920,1080,1920,1080,{1710,10,200,130});
+    Check(normal.x==1710 && normal.y==10 && normal.width==200 && normal.height==130);
+    Check(std::abs(normal.aspect-200.f/130)<1e-6);
+    const auto scaled=FpsPanelCrop(1280,720,1920,1080,{1070,10,200,130});
+    Check(scaled.x==1605 && scaled.y==15 && scaled.width==300 && scaled.height==195);
+    Check(scaled.aspect==normal.aspect);
+    const auto small=FpsPanelCrop(240,160,1920,1080,{200,140,200,130});
+    Check(small.x==1600 && small.y==945 && small.width==320 && small.height==135 && small.aspect==2);
+    Check(FpsPanelCrop(0,720,1920,1080,{0,0,200,130}).width==0);
+    Check(FpsPanelCrop(1280,720,1920,1080,{}).width==0);
+    Check(FpsPanelCrop(1280,720,1920,1080,{1280,0,10,10}).width==0);
+    for (uint32_t width : {1u,319u,320u,1280u,3840u}) {
+      for (uint32_t height : {1u,199u,200u,720u,2160u}) {
+        const auto crop=FpsPanelCrop(width,height,1920,1080,{width/2,height/2,200,130});
+        Check(crop.width>0 && crop.height>0 && crop.x+crop.width<=1920 && crop.y+crop.height<=1080);
+      }
+    }
+  }
   {
   const float full_hud[4]={1,1,0,0};
   auto clip=HudPanelClip(1920,1080,full_hud);

@@ -723,7 +723,8 @@ void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
     const bool system_dialog=rex::kernel::xam::xeXamIsUIActive();
     const bool opening_dialog=system_dialog && !dialog_was_open;
     dialog_was_open=system_dialog;
-    if (!system_dialog && (!simple_settings_dialog_ || !simple_settings_dialog_->visible())) return nullptr;
+    const bool fps_only=!system_dialog && (!simple_settings_dialog_ || !simple_settings_dialog_->visible());
+    if (fps_only && !rex::cvar::Query<bool>("show_fps_counter")) return nullptr;
     if (!skate3::vr::GameVrEnabled() && !rex::cvar::Query<bool>("skate3_vr_settings_test")) return nullptr;
     if (opening_dialog && window()) {
 #if defined(_WIN32)
@@ -732,7 +733,7 @@ void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
       window()->Focus();
       REXLOG_INFO("VR: game dialog opened; desktop keyboard focus={}",window()->HasFocus());
     }
-    return skate3::vr::BeginSettingsSurface(context,system_dialog);
+    return skate3::vr::BeginSettingsSurface(context,system_dialog,fps_only);
   }, [] { skate3::vr::EndSettingsSurface(); });
 #endif
   // Native/emulated corner readout (top right; off by default, cvar
@@ -806,7 +807,8 @@ void Skate3BaseApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
 void Skate3BaseApp::OnPostSetup() {
 #if SKATE3_HAS_OPENXR
   skate3::vr::InitializeSettingsSurface();
-  if (rex::cvar::Query<bool>("skate3_vr_settings_test"))
+  if (rex::cvar::Query<bool>("skate3_vr_settings_test") &&
+      !rex::cvar::Query<bool>("show_fps_counter"))
     app_context().CallInUIThreadDeferred([this] { ToggleSimpleSettings(); });
   if (rex::cvar::Query<bool>("skate3_vr")) {
     rex::ui::RegisterBind("bind_skate3_vr_capture", "Ctrl+F7", "Capture VR stereo images", [] { skate3::vr::CaptureGameVr(); });
@@ -836,7 +838,8 @@ void Skate3BaseApp::OnPostSetup() {
 
   if (auto* input_system = static_cast<rex::input::InputSystem*>(runtime()->input_system())) {
 #if SKATE3_HAS_OPENXR
-    if (rex::cvar::Query<bool>("skate3_vr")) input_system->AddDriver(skate3::vr::CreateVrControllerDriver());
+    if (rex::cvar::Query<bool>("skate3_vr") || rex::cvar::Query<bool>("skate3_vr_simulate_route"))
+      input_system->AddDriver(skate3::vr::CreateVrControllerDriver());
 #endif
     // Input/guest threads. Gated by callback_gate_ (see the header): after
     // OnShutdown this keeps guest input off and never touches `this`.
@@ -974,7 +977,8 @@ void Skate3BaseApp::OnPostSetup() {
 void Skate3BaseApp::OnPreSetup(rex::RuntimeConfig& config) {
 #if SKATE3_HAS_OPENXR
   if (!REXCVAR_GET(skate3_setup_only) &&
-      (rex::cvar::Query<bool>("skate3_vr") || rex::cvar::Query<bool>("skate3_vr_resolution_test"))) {
+      (rex::cvar::Query<bool>("skate3_vr") || rex::cvar::Query<bool>("skate3_vr_resolution_test") ||
+       rex::cvar::Query<bool>("skate3_vr_compare_frame_work"))) {
     skate3::vr::InitializeGameVr();
     config.graphics = std::make_unique<rex::graphics::vulkan::VulkanGraphicsSystem>();
   }

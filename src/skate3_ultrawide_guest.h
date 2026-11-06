@@ -49,7 +49,8 @@ struct Skate3UltrawideGameFrustumPatchScope {
   Skate3UltrawideGameFrustumPatchScope(PPCContext& ctx_, u8* base_, uint32_t cull_block)
       : ctx(ctx_), base(base_) {
 #if SKATE3_HAS_OPENXR
-    if (rex::cvar::Query<bool>("skate3_vr") &&
+    if ((rex::cvar::Query<bool>("skate3_vr") ||
+         rex::cvar::Query<bool>("skate3_vr_compare_frame_work")) &&
         rex::cvar::Query<bool>("skate3_vr_expand_game_frustum") &&
         rex::graphics::IsNativeGuestOutputActive() &&
         rex::kernel::guest_presence::GameplayContextValue() == 1 &&
