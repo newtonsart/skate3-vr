@@ -22,6 +22,65 @@ FILES = ["include/rex/ui/vulkan/instance.h", "src/ui/vulkan/vulkan_instance.cpp"
 
 
 class InteropTests(unittest.TestCase):
+    def test_startup_failure_reports_cause_and_stops_setup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sdk = Path(directory) / "sdk"
+            for name in FILES:
+                target = sdk / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(SOURCE / name, target)
+            apply(sdk)
+            app = (sdk / "src/ui/rex_app.cpp").read_text()
+            start = app.index("  try {\n    OnPreSetup(config_);")
+            guard = app[start:app.index("  // A consumer may substitute", start)]
+            code = r'''
+#include <cassert>
+#include <stdexcept>
+#include <string>
+std::string logged,shown;
+namespace fmt {
+std::string format(const char*,const char* cause) {
+  return std::string("Application initialization failed: ")+cause;
+}
+}
+#define REXLOG_ERROR(pattern,message) (logged=message)
+namespace rex {
+enum class SimpleMessageBoxType { Error };
+void ShowSimpleMessageBox(SimpleMessageBoxType type,const std::string& msg) {
+  assert(type==SimpleMessageBoxType::Error); shown=msg;
+}
+}
+struct App {
+  int config_=0,hook_calls=0,graphics_setups=0;
+  bool fail=false;
+  void OnPreSetup(int&) {
+    ++hook_calls;
+    if(fail) throw std::runtime_error("Detect HMD (connect Quest Link and activate PCVR) failed: XrResult=-35");
+  }
+  bool Setup() {
+'''+guard+r'''
+    ++graphics_setups;
+    return true;
+  }
+};
+int main() {
+  App app;
+  assert(app.Setup() && app.hook_calls==1 && app.graphics_setups==1);
+  assert(logged.empty() && shown.empty());
+  app={}; app.fail=true;
+  assert(!app.Setup() && app.hook_calls==1 && app.graphics_setups==0);
+  assert(shown==logged && shown.find("connect Quest Link")!=std::string::npos);
+  assert(shown.find("XrResult=-35")!=std::string::npos);
+}
+'''
+            cpp = Path(directory) / "startup.cpp"
+            exe = Path(directory) / "startup.exe"
+            cpp.write_text(code)
+            compiler = shutil.which("clang++") or shutil.which("g++")
+            self.assertIsNotNone(compiler, "Run in a C++ developer shell")
+            subprocess.run([compiler, "-std=c++20", str(cpp), "-o", str(exe)], check=True)
+            subprocess.run([str(exe)], check=True)
+
     def test_external_submission_wait_and_failures(self):
         patch = (Path(__file__).parent / "ApplyOpenXRInterop.py").read_text()
         start = patch.index("  bool FlushNativeForExternal(bool wait)")

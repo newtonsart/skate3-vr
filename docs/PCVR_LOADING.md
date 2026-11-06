@@ -73,3 +73,19 @@ violations, zero error-level messages and zero VUID messages, with
 VK_LAYER_KHRONOS_validation explicitly enabled. This covers one boot/load,
 not every streaming race or map. The final build is installed into both
 launch locations; the candidate is no longer the only place with these fixes.
+
+## Report failures before graphics setup (2026-11-06)
+
+An exception from the application's OnPreSetup hook, including an OpenXR
+headset-detection failure, escaped startup before the game window existed.
+The launcher could therefore disappear with only the starting line in the log.
+The SDK integration now catches standard exceptions at that shared call site,
+records the original cause, shows an error dialog and stops setup before
+graphics initialization. The regression test covers a missing-headset error
+and a successful startup hook; the pinned patch remains repeatable.
+
+The November 6 failed attempts did not retain their exception details, so their
+exact cause cannot be established retroactively. A later attempt detected
+Meta Quest 3 on Oculus and reached gameplay. This change reports future early
+initialization failures; it does not establish that every possible startup
+failure is fixed.

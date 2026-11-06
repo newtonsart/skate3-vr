@@ -69,6 +69,16 @@ def apply(sdk):
     for variable in ("game_dir", "user_dir", "update_dir", "cache_dir"):
         edit("src/ui/rex_app.cpp", f"{variable} = *config_value;",
              f"{variable} = rex::to_path(*config_value);")
+    edit("src/ui/rex_app.cpp", "#include <fmt/format.h>",
+         "#include <exception>\n#include <fmt/format.h>")
+    edit("src/ui/rex_app.cpp", "  OnPreSetup(config_);", """  try {
+    OnPreSetup(config_);
+  } catch (const std::exception& error) {
+    const auto msg = fmt::format("Application initialization failed: {}", error.what());
+    REXLOG_ERROR("{}", msg);
+    rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, msg);
+    return false;
+  }""")
     for variable, value in (("game_dir", "game_data_cvar"), ("user_dir", "user_data_cvar"),
                             ("update_dir", "update_data_cvar"), ("cache_dir", "cache_root_cvar"),
                             ("metadata_dir", "metadata_root_cvar")):
