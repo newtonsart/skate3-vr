@@ -8679,8 +8679,10 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
 
   // Reset this frame's bone ring region (shared by the shadow casters and
   // the main pass: the shadow pass allocates first, the main pass appends).
-  const uint64_t frame_number = g_frames_rendered.load(std::memory_order_relaxed) - (second_vr_eye ? 1 : 0);
-  const uint32_t bone_slot = g_r.bone_regions.Region(context.device, frame_number);
+  // Texture routes share a stereo frame; host writes need a separate slot per eye.
+  const uint64_t upload_frame = g_frames_rendered.load(std::memory_order_relaxed);
+  const uint64_t frame_number = upload_frame - (second_vr_eye ? 1 : 0);
+  const uint32_t bone_slot = g_r.bone_regions.Region(context.device, upload_frame);
   const uint32_t bone_region = bone_slot * RendererState::kBoneRegionSize;
   // A neutral b2 block prevents ordinary draws from inheriting body opacity.
   std::memset(g_r.bone_ring_cpu + bone_region, 0, 512u);
@@ -8955,7 +8957,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   // shader is also gated by sh_misc.y).
   if (g_r.shadow_cb != nullptr) {
     const uint32_t cb_offset =
-        g_r.shadow_cb_regions.Region(context.device, frame_number) *
+        g_r.shadow_cb_regions.Region(context.device, upload_frame) *
         RendererState::kShadowCbSlice;
     float* cb = reinterpret_cast<float*>(g_r.shadow_cb_cpu + cb_offset);
     std::memset(cb, 0, RendererState::kShadowCbSlice);
@@ -11626,7 +11628,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
     return it->second.valid ? &it->second : &g_r.white;
   };
   const uint32_t ui_region =
-      g_r.ui_regions.Region(context.device, frame_number) * RendererState::kUiRegionSize;
+      g_r.ui_regions.Region(context.device, upload_frame) * RendererState::kUiRegionSize;
   uint32_t ui_offset = 0;
   // A skipped spline strip or HUD draw is a visible hole; name it in the log
   // instead of dropping it silently (rolling-capped).
@@ -11844,7 +11846,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   cmd->ProfileRegion(nrhi::ProfileStage::kVolumetrics);
   if (hdr_on && use_depth && !loading_native &&
       ApplyVolumetricPass(context, cmd, scene, viewport, scissor, lin_depth_ran,
-                          frame_number)) {
+                          upload_frame)) {
     post_ran = true;
   }
 
@@ -11856,7 +11858,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   cmd->ProfileRegion(nrhi::ProfileStage::kBloom);
   if (hdr_on) {
     ApplyHdrPost(context, cmd, viewport, scissor, loading_native,
-                 frame_number);
+                 upload_frame);
     post_ran = true;
   }
 
@@ -11869,7 +11871,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
     cmd->SetBindingLayout(g_r.layout);
     if (g_r.shadow_cb != nullptr) {
       const uint32_t cb_offset =
-          g_r.shadow_cb_regions.Region(context.device, frame_number) *
+          g_r.shadow_cb_regions.Region(context.device, upload_frame) *
         RendererState::kShadowCbSlice;
       cmd->SetConstantBuffer(6, g_r.shadow_cb, cb_offset);
       cmd->SetConstantBuffer(9, g_r.bone_ring, bone_region);
@@ -12034,7 +12036,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
            {-0.5f, -0.888888896f, 1.0f, 1.77777779f}},
       };
       const uint32_t cb_slot_base =
-          g_r.pfx_cb_regions.Region(context.device, frame_number) *
+          g_r.pfx_cb_regions.Region(context.device, upload_frame) *
           RendererState::kPfxCbSlots;
       uint32_t cb_slot_next = 0;
       const int32_t pfx_debug =
@@ -12302,7 +12304,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
       cmd->SetBindingLayout(g_r.layout);
       if (g_r.shadow_cb != nullptr) {
         const uint32_t cb_offset =
-            g_r.shadow_cb_regions.Region(context.device, frame_number) *
+            g_r.shadow_cb_regions.Region(context.device, upload_frame) *
         RendererState::kShadowCbSlice;
         cmd->SetConstantBuffer(6, g_r.shadow_cb, cb_offset);
         cmd->SetConstantBuffer(9, g_r.bone_ring, bone_region);
@@ -12334,7 +12336,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
       if (vignette != nullptr && vignette != &g_r.white && vignette->valid &&
           vignette->srv != nullptr) {
         const uint64_t cb_offset =
-            uint64_t(g_r.screen_fx_cb_regions.Region(context.device, frame_number)) *
+            uint64_t(g_r.screen_fx_cb_regions.Region(context.device, upload_frame)) *
             RendererState::kScreenFxCbSlice;
         uint8_t* dst = g_r.screen_fx_cb_ptr + cb_offset;
         std::memset(dst, 0, RendererState::kScreenFxCbSlice);
@@ -12391,7 +12393,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
         cmd->SetBindingLayout(g_r.layout);
         if (g_r.shadow_cb != nullptr) {
           const uint32_t frame_cb_offset =
-              g_r.shadow_cb_regions.Region(context.device, frame_number) *
+              g_r.shadow_cb_regions.Region(context.device, upload_frame) *
               RendererState::kShadowCbSlice;
           cmd->SetConstantBuffer(6, g_r.shadow_cb, frame_cb_offset);
         }

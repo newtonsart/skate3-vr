@@ -496,6 +496,23 @@ void* NativeRhiGetVulkanDevice(nrhi::Device* device) {
 }
 
 nrhi::Device* CreateNativeRhiDevice(VulkanCommandProcessor* command_processor) {""")
+    edit("include/rex/graphics/vulkan/native_rhi_vulkan.h",
+         "void DestroyNativeRhiDevice(nrhi::Device* device);",
+         "void DestroyNativeRhiDevice(nrhi::Device* device);\n"
+         "bool NativeRhiCanOverlapNextFrame(nrhi::Device* device);")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         "  NrFrameProf prof_;",
+         "  // Adjacent primary regions are distinct; their overflow regions can overlap.\n"
+         "  bool CanOverlapNextFrame() const {\n"
+         "    static_assert(kCpFramesInFlight > 1);\n"
+         "    return ring_overflow_hops_ == 0;\n"
+         "  }\n\n"
+         "  NrFrameProf prof_;")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         "void DestroyNativeRhiDevice(nrhi::Device* device) {",
+         "bool NativeRhiCanOverlapNextFrame(nrhi::Device* device) {\n"
+         "  return static_cast<NrDeviceVulkan*>(device)->CanOverlapNextFrame();\n"
+         "}\n\nvoid DestroyNativeRhiDevice(nrhi::Device* device) {")
     edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
          "  nrhi::PrimitiveTopology topology_ = nrhi::PrimitiveTopology::kTriangleList;",
          "  nrhi::PrimitiveTopology topology_ = nrhi::PrimitiveTopology::kTriangleList;\n"

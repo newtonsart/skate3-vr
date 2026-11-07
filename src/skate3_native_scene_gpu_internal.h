@@ -1258,11 +1258,11 @@ bool ApplyVolumetricPass(const NativeGuestOutputRenderContext& context,
                          nrhi::Cmd* cmd, const FrameScene& scene,
                          const nrhi::Viewport& viewport,
                          const nrhi::Rect& scissor, bool lin_depth_ready,
-                         uint64_t frame_number);
+                         uint64_t upload_frame);
 void ApplyHdrPost(const NativeGuestOutputRenderContext& context,
                   nrhi::Cmd* cmd, const nrhi::Viewport& viewport,
                   const nrhi::Rect& scissor, bool loading_native,
-                  uint64_t frame_number);
+                  uint64_t upload_frame);
 bool ApplyMenuBlurPass(const NativeGuestOutputRenderContext& context, nrhi::Cmd* cmd,
                        float target_sigma, bool output_in_guest_output_state);
 // Blur-over-emulated-frames post processor registered by Install().

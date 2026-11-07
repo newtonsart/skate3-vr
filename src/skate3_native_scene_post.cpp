@@ -1322,7 +1322,7 @@ bool ApplyVolumetricPass(const NativeGuestOutputRenderContext& context,
                          nrhi::Cmd* cmd, const FrameScene& scene,
                          const nrhi::Viewport& viewport,
                          const nrhi::Rect& scissor, bool lin_depth_ready,
-                         uint64_t frame_number) {
+                         uint64_t upload_frame) {
   // Shafts need this frame's shadow state: the receiver constants (b1
   // slice), the blurred CSM atlas left in PIXEL_SHADER_RESOURCE by the
   // shadow pass, and a valid capture. The haze needs only the sun capture.
@@ -1494,7 +1494,7 @@ bool ApplyVolumetricPass(const NativeGuestOutputRenderContext& context,
   const bool inv_ok = Invert4x4(scene.view_proj, inv_vp);
 
   const uint32_t cb_offset =
-      g_r.shadow_cb_regions.Region(context.device, frame_number) *
+      g_r.shadow_cb_regions.Region(context.device, upload_frame) *
       RendererState::kShadowCbSlice;
   cmd->SetBindingLayout(g_r.hdr_layout);
   cmd->SetPrimitiveTopology(nrhi::PrimitiveTopology::kTriangleList);
@@ -1777,7 +1777,7 @@ bool EnsureHdrPipeline(const NativeGuestOutputRenderContext& context) {
 void ApplyHdrPost(const NativeGuestOutputRenderContext& context,
                   nrhi::Cmd* cmd, const nrhi::Viewport& viewport,
                   const nrhi::Rect& scissor, bool loading_native,
-                  uint64_t frame_number) {
+                  uint64_t upload_frame) {
   nrhi::Device* device = context.device;
   const uint32_t width = context.guest_output_width;
   const uint32_t height = context.guest_output_height;
@@ -1850,7 +1850,7 @@ void ApplyHdrPost(const NativeGuestOutputRenderContext& context,
   // shaders never read it, but the descriptor must hold a valid buffer.
   if (g_r.shadow_cb != nullptr) {
     const uint32_t cb_offset =
-        g_r.shadow_cb_regions.Region(context.device, frame_number) *
+        g_r.shadow_cb_regions.Region(context.device, upload_frame) *
         RendererState::kShadowCbSlice;
     cmd->SetConstantBuffer(6, g_r.shadow_cb, cb_offset);
   }
