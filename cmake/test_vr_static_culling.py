@@ -5,10 +5,10 @@ gpu=Path('src/skate3_native_scene_gpu.cpp').read_text(encoding='utf-8')
 init=gpu[gpu.index('  bool cull_bounds_valid = num_verts'):gpu.index('  int min_bi =',gpu.index('  bool cull_bounds_valid = num_verts'))]
 guard=gpu[gpu.index('    const float cull_pos[3]'):gpu.index('    const auto decode_uv',gpu.index('    const float cull_pos[3]'))]
 part=s[s.index('bool CornersOutsideFrustum('):s.index('// Axis-aligned cube of half-extent')]
-draw_start=gpu.index('  const auto timed_draw = ')
-cull=gpu[gpu.index('#if SKATE3_HAS_OPENXR',draw_start):gpu.index('    if (!prof_items)',draw_start)]
-code='''#include <cassert>\n#include <cmath>\n#include <limits>\n#include <algorithm>\n#include <array>\n#include <vector>\n#include <random>\n#include <unordered_map>\n#define SKATE3_HAS_OPENXR 1\n#define REXCVAR_GET(name) cull_enabled\nstruct DrawItem { float bbox_min[3], bbox_max[3], world[16]; bool unlit=false,skinned=false,ropa=false,cloth_quads=false; std::vector<float> bones; unsigned mesh=7; };\n'''+part+'''
-struct Mesh { bool cull_bounds_valid=false; float cull_bbox_min[3],cull_bbox_max[3]; };
+cull=gpu[gpu.index('  const auto skip_outside_eye = '):gpu.index('  // Opaque items already passed')]
+opaque=gpu[gpu.index('    if (skip_outside_eye(item)) continue;'):gpu.index('  // Publish the culled-ctx set')]
+code='''#include <cassert>\n#include <cmath>\n#include <limits>\n#include <algorithm>\n#include <array>\n#include <vector>\n#include <random>\n#include <unordered_map>\n#define SKATE3_HAS_OPENXR 1\n#define REXCVAR_GET(name) cull_enabled\nstruct DrawItem { float bbox_min[3], bbox_max[3], world[16]; bool unlit=false,skinned=false,ropa=false,cloth_quads=false; std::vector<float> bones; unsigned mesh=7; unsigned fingerprint=1; };\n'''+part+'''
+struct Mesh { bool cull_bounds_valid=false; float cull_bbox_min[3],cull_bbox_max[3]; unsigned fingerprint=1; };
 Mesh Bounds(const std::vector<std::array<float,3>>& positions) {
  Mesh out; const auto num_verts=positions.size();
 '''+init+'''
@@ -17,21 +17,23 @@ Mesh Bounds(const std::vector<std::array<float,3>>& positions) {
  }
  out.cull_bounds_valid=cull_bounds_valid; return out;
 }
-bool Cull(DrawItem item,Mesh mesh,bool enabled=true,bool vr=true) {
+bool Cull(DrawItem candidate,Mesh mesh,bool enabled=true,bool vr=true) {
  bool cull_enabled=enabled;
  struct { std::unordered_map<unsigned,Mesh> meshes; } g_r;
- g_r.meshes.emplace(item.mesh,mesh);
+ g_r.meshes.emplace(candidate.mesh,mesh);
  struct { bool override_camera=true; unsigned frustum_skips=0; } eye;
  auto* vr_eye=vr?&eye:nullptr;
  struct { float view_proj[16]={1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}; } scene;
- bool drew=false;
- const auto timed_draw=[&](const DrawItem& item) {
+ int distance_checks=0;
+ const auto view_dist2=[&](const DrawItem&) { ++distance_checks; return 0.f; };
+ std::vector<std::pair<float,const DrawItem*>> opaque_items;
 '''+cull+'''
-  drew=true;
- };
- timed_draw(item);
- assert(drew==(eye.frustum_skips==0));
- return !drew;
+ const std::array items{candidate};
+ for (const auto& item : items) {
+'''+opaque+'''
+ assert(opaque_items.size()==size_t(distance_checks));
+ assert(opaque_items.empty()==(eye.frustum_skips==1));
+ return opaque_items.empty();
 }
 '''
 code+='''int main() {
@@ -61,6 +63,7 @@ code+='''int main() {
  assert(!ItemOutsideFrustum(it,eye,1.2f,1));
  assert(BoundsOutsideFrustum(b.cull_bbox_min,b.cull_bbox_max,it.world,eye,1.2f,1));
  assert(Cull(it,b)); assert(!Cull(it,b,false)); assert(!Cull(it,b,true,false));
+ auto stale=b; ++stale.fingerprint; assert(!Cull(it,stale));
  it.unlit=true; assert(!Cull(it,b)); it.unlit=false;
  it.skinned=true; assert(!Cull(it,b)); it.skinned=false;
  it.ropa=true; assert(!Cull(it,b)); it.ropa=false;
@@ -91,4 +94,4 @@ with tempfile.TemporaryDirectory(dir='out/test-temp') as d:
  p=Path(d)/'test.cpp'; p.write_text(code); exe=Path(d)/'test.exe'
  subprocess.run(['clang++','-std=c++20',str(p),'-o',str(exe)],check=True)
  subprocess.run([str(exe.resolve())],check=True)
-print('PASS: decoded bounds, empty/nonfinite inputs, wrong guest bounds, margins, head turns and 2000 transformed visible-vertex checks')
+print('PASS: decoded bounds, stale meshes, early opaque rejection, margins, head turns and 2000 transformed visible-vertex checks')

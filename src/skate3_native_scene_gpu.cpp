@@ -10928,25 +10928,28 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
       g_r.occl_grid_valid = false;
     }
   }
-  // Per-draw wrapper for the profiling mode: attribute each item's total
-  // draw_item cost to its visibility class. Out-of-frustum items and
-  // occlusion-proven-hidden items cost CPU here but can never contribute
-  // pixels; a large share in either class is a visibility-culling gap, not
-  // a scene-density cost.
-  const auto timed_draw = [&](const DrawItem& item) {
+  const auto skip_outside_eye = [&](const DrawItem& item) {
 #if SKATE3_HAS_OPENXR
     if (REXCVAR_GET(skate3_vr_static_frustum_cull) && vr_eye && vr_eye->override_camera &&
         !item.unlit && !item.skinned && !item.ropa && !item.cloth_quads && item.bones.empty()) {
-      const auto mesh=g_r.meshes.find(item.mesh);
-      // These bounds enclose the cached vertices the draw actually uses.
-      if (mesh!=g_r.meshes.end() && mesh->second.cull_bounds_valid &&
-          BoundsOutsideFrustum(mesh->second.cull_bbox_min,mesh->second.cull_bbox_max,
-                               item.world,scene.view_proj,1.2f,1.0f)) {
+      const auto mesh = g_r.meshes.find(item.mesh);
+      // A stale decode must reach draw_item so it can request a replacement.
+      if (mesh != g_r.meshes.end() && mesh->second.fingerprint == item.fingerprint &&
+          mesh->second.cull_bounds_valid &&
+          BoundsOutsideFrustum(mesh->second.cull_bbox_min, mesh->second.cull_bbox_max,
+                               item.world, scene.view_proj, 1.2f, 1.0f)) {
         ++vr_eye->frustum_skips;
-        return;
+        return true;
       }
     }
+#else
+    (void)item;
 #endif
+    return false;
+  };
+  // Opaque items already passed the eye test before entering the sort list.
+  const auto timed_draw = [&](const DrawItem& item) {
+    if (!opaque_scene_pass && skip_outside_eye(item)) return;
     if (!prof_items) {
       draw_item(item);
       return;
@@ -11280,8 +11283,9 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
       }
       continue;
     }
-    opaque_items.emplace_back(view_dist2(item), &item);
     stamp_route(1);
+    if (skip_outside_eye(item)) continue;
+    opaque_items.emplace_back(view_dist2(item), &item);
   }
   // Publish the culled-ctx set every rendered frame, including empty ones:
   // the guest filter must clear promptly when the cull stands down. Ctxs
