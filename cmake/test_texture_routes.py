@@ -9,6 +9,8 @@ header = (root / 'src/skate3_native_scene_gpu_internal.h').read_text()
 reader = source[source.index('bool ReadStableTexWords('):source.index('// Frames-per-second estimate')]
 route = source[source.index('      auto rit = g_r.tex_routes.find(tex_ptr);'):source.index('      auto sit = g_r.tex_store.find(route.key);')]
 struct = header[header.index('  struct TexRoute {'):header.index('  std::unordered_map<uint32_t, TexRoute> tex_routes;')]
+prepared = source[source.index('      const bool prepare = prepare_item'):source.index('#endif\n      tex_pending = false;',source.index('      const bool prepare = prepare_item'))]
+sticky = header[header.index('  struct TexStickySite {'):header.index('  std::unordered_map<uint64_t, TexStickySite> tex_sticky;')]
 code = r'''
 #include <array>
 #include <atomic>
@@ -39,6 +41,9 @@ struct GuestTexture {};
 struct RendererState {
 '''+struct+r'''
   std::unordered_map<uint32_t,TexRoute> tex_routes;
+'''+sticky+r'''
+  std::unordered_map<uint64_t,TexStickySite> tex_sticky;
+  uint64_t texture_revision=0;
   GuestTexture white;
 } g_r;
 uint64_t FetchWordsKey(const uint32_t words[6]) {
@@ -61,7 +66,24 @@ void Words(uint32_t type,uint32_t address) {
   for (auto& value:w) value=SwapU32(value);
   std::memcpy(memory+16+28,w,sizeof(w));
 }
+const GuestTexture* Reuse(uint32_t tex_ptr,uint64_t piece,uint64_t frame_number,bool retained=false) {
+  constexpr bool second_vr_eye=true;
+  constexpr uint32_t skey=7;
+  const bool prepare_item=!retained && piece;
+  struct { unsigned material_reuses=0; } eye;
+  auto* vr_eye=&eye;
+  auto site_it=g_r.tex_sticky.end();
+  bool tex_pending=true;
+'''+prepared+r'''
+  return nullptr;
+}
 int main() {
+  auto& site=g_r.tex_sticky[7];
+  site.prepared=&g_r.white; site.piece=13; site.last_used_frame=5; site.prepared_object=16;
+  assert(Reuse(16,13,5)==&g_r.white);
+  assert(!Reuse(17,13,5) && !Reuse(16,14,5) && !Reuse(16,13,6) && !Reuse(16,13,5,true));
+  ++g_r.texture_revision;
+  assert(!Reuse(16,13,5));
   Words(2,0x12345052);
   Resolve(); assert(reads==2 && g_r.tex_routes.size()==1);
   auto& route=g_r.tex_routes.at(16);

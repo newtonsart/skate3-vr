@@ -10,6 +10,7 @@ struct TrackingFrame {
   XrTime display_time = 0;
   XrDuration display_period = 0;
   bool should_render = false;
+  double wait_ms=0, begin_ms=0, tracking_ms=0;
   XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
   XrViewStateFlags view_flags = 0;
   XrView eyes[2] = {{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};

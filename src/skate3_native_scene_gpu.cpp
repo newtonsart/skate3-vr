@@ -425,6 +425,7 @@ void EvictTexStore(uint64_t frame_number, uint64_t submission) {
       g_tex_store_bytes -= std::min<uint64_t>(g_tex_store_bytes,
                                               it->second.gpu_bytes);
       RetireGuestTexture(it->second, submission);
+      ++g_r.texture_revision;
       g_r.tex_store.erase(it);
     }
   }
@@ -594,6 +595,7 @@ void EvictMeshStore(uint64_t frame_number) {
       g_r.device->DestroyDeferred(it->second.vb);
       g_r.device->DestroyDeferred(it->second.ib);
       g_r.ropa_shapes.erase(it->first);
+      ++g_r.mesh_revision;
       g_r.meshes.erase(it);
     }
   }
@@ -4918,6 +4920,7 @@ void WarmItemResources(const NativeGuestOutputRenderContext& context, uint8_t* b
       }
       PoolMeshBuffer(g_r.device, mit->second.vb);
       PoolMeshBuffer(g_r.device, mit->second.ib);
+      ++g_r.mesh_revision;
       g_r.meshes.erase(mit);
       need_mesh = true;
     } else {
@@ -4970,6 +4973,7 @@ void WarmItemResources(const NativeGuestOutputRenderContext& context, uint8_t* b
                      tex_ptr, key, it->second.incomplete, it->second.payload_fp, fp);
       }
       RetireGuestTexture(it->second, context.device->CurrentSubmission());
+      ++g_r.texture_revision;
       g_r.tex_store.erase(it);
     }
     if (!within()) {
@@ -5542,6 +5546,7 @@ void PrewarmCommit(const NativeGuestOutputRenderContext& context,
           // old buffers may be referenced by the in-flight submission.
           PoolMeshBuffer(g_r.device, mit->second.vb);
           PoolMeshBuffer(g_r.device, mit->second.ib);
+          ++g_r.mesh_revision;
           g_r.meshes.erase(mit);
         }
         r.buffers.last_used_frame = frame_number;
@@ -5685,6 +5690,7 @@ void PrewarmCommit(const NativeGuestOutputRenderContext& context,
           }
           t.gt.last_used_frame = wit->second.last_used_frame;
           RetireGuestTexture(wit->second, context.device->CurrentSubmission());
+          ++g_r.texture_revision;
           g_r.tex_store.erase(wit);
         }
         if (t.valid) {
@@ -6888,6 +6894,7 @@ void ReleaseRetiredAndFlushCaches(const NativeGuestOutputRenderContext& context)
     for (auto& [key, t] : g_r.tex_store) {
       RetireGuestTexture(t, submission);
     }
+    ++g_r.texture_revision;
     g_r.tex_store.clear();
     g_r.tex_routes.clear();
     g_r.words_sticky.clear();
@@ -6900,6 +6907,7 @@ void ReleaseRetiredAndFlushCaches(const NativeGuestOutputRenderContext& context)
       if (m.vb) g_r.device->DestroyDeferred(m.vb);
       if (m.ib) g_r.device->DestroyDeferred(m.ib);
     }
+    ++g_r.mesh_revision;
     g_r.meshes.clear();
     g_mesh_miss_fail.clear();
     {
@@ -9327,6 +9335,31 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   bool opaque_scene_pass = false;
   CharacterFadeUniformCache fade_uniforms;
   std::unordered_map<const DrawItem*, VbBinding> fade_ropa_bindings;
+#if SKATE3_HAS_OPENXR
+  const bool share_preparation = vr_eye && vr_eye->override_camera && vr_eye->share_preparation &&
+      vr_eye->render_scene.get() == &scene;
+  if (share_preparation) g_r.stereo_meshes.resize(scene.items.size());
+#endif
+  const auto rigid_item = [](const DrawItem& item) {
+    return !item.skinned && !item.ropa && !item.cloth_quads && item.bones.empty();
+  };
+  const auto lookup_mesh = [&](const DrawItem& item) -> MeshBuffers* {
+#if SKATE3_HAS_OPENXR
+    if (share_preparation && rigid_item(item)) {
+      auto& cached = g_r.stereo_meshes[&item - scene.items.data()];
+      if (cached.frame == frame_number && cached.revision == g_r.mesh_revision) {
+        if (second_vr_eye && cached.buffers) ++vr_eye->mesh_reuses;
+        return cached.buffers;
+      }
+      const auto it = g_r.meshes.find(item.mesh);
+      if (it != g_r.meshes.end() && it->second.fingerprint == item.fingerprint)
+        cached = {&it->second, frame_number, g_r.mesh_revision};
+      return it == g_r.meshes.end() ? nullptr : &it->second;
+    }
+#endif
+    const auto it = g_r.meshes.find(item.mesh);
+    return it == g_r.meshes.end() ? nullptr : &it->second;
+  };
   const auto draw_item = [&](const DrawItem& item) {
     // Stage split points (profiling only): t0..t1 mesh serve, t1..t2 texture
     // serve, t2..t3 constants assembly, t3..end binds + draw recording.
@@ -9364,23 +9397,24 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
     const bool ropa_inline =
         item.ropa && REXCVAR_GET(skate3_native_render_scene_ropa_inline);
     const bool dynamic_payload = item.skinned || item.cloth_quads || item.ropa;
-    auto it = g_r.meshes.find(item.mesh);
-    if (second_vr_eye && it == g_r.meshes.end()) return;
+    auto* mesh = lookup_mesh(item);
+    if (second_vr_eye && !mesh) return;
     if (item.retained &&
-        (it == g_r.meshes.end() || it->second.fingerprint != item.fingerprint)) {
+        (!mesh || mesh->fingerprint != item.fingerprint)) {
       // Retained off-screen items (edge-of-view guard band) outlive their
       // guest-side lifetime guarantees; the arena may have streamed out or
       // been reused since capture. Draw only the exact cached decode; no
       // guest reads, no heals, no miss enqueues from here.
       return;
     }
-    if (it != g_r.meshes.end() && it->second.fingerprint != item.fingerprint &&
+    if (mesh && mesh->fingerprint != item.fingerprint &&
         REXCVAR_GET(skate3_native_render_scene_mesh_revalidate)) {
       if (item.cloth_quads || ropa_inline) {
-        PoolMeshBuffer(g_r.device, it->second.vb);
-        PoolMeshBuffer(g_r.device, it->second.ib);
-        g_r.meshes.erase(it);
-        it = g_r.meshes.end();
+        PoolMeshBuffer(g_r.device, mesh->vb);
+        PoolMeshBuffer(g_r.device, mesh->ib);
+        ++g_r.mesh_revision;
+        g_r.meshes.erase(item.mesh);
+        mesh = nullptr;
       } else if (!dynamic_payload) {
         // Streaming heal: keep drawing the old decode this frame; the
         // workers decode the new payload and the commit swaps it in.
@@ -9390,7 +9424,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
         }
       }
     }
-    if (it == g_r.meshes.end()) {
+    if (!mesh) {
       if (!item.cloth_quads && !ropa_inline) {
         // ALL mesh misses decode on the workers, including first-sight
         // skinned entities (a streamed-in NPC appears 1-2 frames late
@@ -9422,10 +9456,10 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
         return;
       }
       buffers.fingerprint = item.fingerprint;
-      it = g_r.meshes.emplace(item.mesh, buffers).first;
+      mesh = &g_r.meshes.emplace(item.mesh, buffers).first->second;
     }
-    it->second.last_used_frame = frame_number;
-    const MeshBuffers& buffers = it->second;
+    mesh->last_used_frame = frame_number;
+    const MeshBuffers& buffers = *mesh;
     if (prof_items) {
       di_t1 = PerfClock::now();
     }
@@ -9721,8 +9755,49 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
     // serve the last texture this item slot successfully resolved, the
     // same visual as the console's own mip transition. slot: 0 diffuse,
     // 1 lightmap, 2 macro, 3 normal/ripple, 4 decal art, 5 hair, 6 spec.
+    const uint64_t piece = [&] {
+      // Piece signature: the shading class plus the geometry's total index
+      // count. A world mesh's material-detail demote keeps its geometry
+      // (same signature: the hold below still applies); a recycled mesh
+      // address now carrying a different piece does not.
+      uint64_t piece = (uint64_t(item.char_family) << 1) |
+                       (uint64_t(item.hair) << 4) | (uint64_t(item.char_alpha) << 5) |
+                       (uint64_t(item.ropa) << 6) | 1u;
+      {
+        uint64_t indices = 0;
+        for (const DrawEntry& d : item.draws) {
+          indices += d.index_count;
+        }
+        // No geometry yet (draws not populated this frame): the piece is
+        // unknown, neither compared nor stamped, so a transiently empty
+        // item never cancels its own legitimate hold.
+        piece = indices != 0 ? (piece | (indices << 8)) : 0;
+      }
+      return piece;
+    }();
+#if SKATE3_HAS_OPENXR
+    const bool prepare_item = share_preparation && !item.retained && piece &&
+        rigid_item(item) && g_trace_mesh_addr == 0;
+#endif
     const auto resolve_texture = [&](uint32_t tex_ptr,
                                      uint32_t slot) -> const GuestTexture* {
+      const uint64_t skey = (uint64_t(item.mesh) << 3) | slot;
+      auto site_it = g_r.tex_sticky.end();
+#if SKATE3_HAS_OPENXR
+      const bool prepare = prepare_item && tex_ptr;
+      if (prepare) {
+        site_it = g_r.tex_sticky.find(skey);
+        if (site_it != g_r.tex_sticky.end()) {
+          auto& site = site_it->second;
+          if (second_vr_eye && site.prepared && site.last_used_frame == frame_number && site.piece == piece &&
+              site.prepared_object == tex_ptr && site.prepared_revision == g_r.texture_revision) {
+            tex_pending = false;
+            ++vr_eye->material_reuses;
+            return site.prepared;
+          }
+        }
+      }
+#endif
       tex_pending = false;
       const GuestTexture* t = resolve_texture_raw(tex_ptr);
       // Near-uniform-black decodes on the WHITE-NEUTRAL slots (1 lightmap,
@@ -9755,24 +9830,6 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
       if (item.retained || tex_ptr == 0) {
         return t;
       }
-      const uint64_t skey = (uint64_t(item.mesh) << 3) | slot;
-      // Piece signature: the shading class plus the geometry's total index
-      // count. A world mesh's material-detail demote keeps its geometry
-      // (same signature: the hold below still applies); a recycled mesh
-      // address now carrying a different piece does not.
-      uint64_t piece = (uint64_t(item.char_family) << 1) |
-                       (uint64_t(item.hair) << 4) | (uint64_t(item.char_alpha) << 5) |
-                       (uint64_t(item.ropa) << 6) | 1u;
-      {
-        uint64_t indices = 0;
-        for (const DrawEntry& d : item.draws) {
-          indices += d.index_count;
-        }
-        // No geometry yet (draws not populated this frame): the piece is
-        // unknown, neither compared nor stamped, so a transiently empty
-        // item never cancels its own legitimate hold.
-        piece = indices != 0 ? (piece | (indices << 8)) : 0;
-      }
       const auto drop_foreign_site = [&](RendererState::TexStickySite& site) {
         if (piece == 0 || site.piece == 0 || site.piece == piece ||
             site.words_key == 0) {
@@ -9788,7 +9845,8 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
         site = RendererState::TexStickySite{};
       };
       if (t != &g_r.white) {
-        RendererState::TexStickySite& site = g_r.tex_sticky[skey];
+        auto& site = site_it != g_r.tex_sticky.end() ? site_it->second : g_r.tex_sticky[skey];
+        site.prepared = nullptr;
         drop_foreign_site(site);
         site.last_used_frame = frame_number;
         // Material-detail downgrade hold: the game's streaming demotes a
@@ -9861,6 +9919,13 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
         if (!g_r.tex_pending_first.empty()) {
           g_r.tex_pending_first.erase(tex_ptr);
         }
+#if SKATE3_HAS_OPENXR
+        if (prepare && !second_vr_eye) {
+          site.prepared = t;
+          site.prepared_revision = g_r.texture_revision;
+          site.prepared_object = tex_ptr;
+        }
+#endif
         return t;
       }
       if (tex_pending) {
@@ -9869,6 +9934,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
         // look instead of a white flash.
         const auto sit = g_r.tex_sticky.find(skey);
         if (sit != g_r.tex_sticky.end()) {
+          sit->second.prepared = nullptr;
           drop_foreign_site(sit->second);
           sit->second.last_used_frame = frame_number;
         }
@@ -10933,12 +10999,12 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   const auto skip_outside_eye = [&](const DrawItem& item) {
 #if SKATE3_HAS_OPENXR
     if (REXCVAR_GET(skate3_vr_static_frustum_cull) && vr_eye && vr_eye->override_camera &&
-        !item.unlit && !item.skinned && !item.ropa && !item.cloth_quads && item.bones.empty()) {
-      const auto mesh = g_r.meshes.find(item.mesh);
+        !item.unlit && rigid_item(item)) {
+      const auto* mesh = lookup_mesh(item);
       // A stale decode must reach draw_item so it can request a replacement.
-      if (mesh != g_r.meshes.end() && mesh->second.fingerprint == item.fingerprint &&
-          mesh->second.cull_bounds_valid &&
-          BoundsOutsideFrustum(mesh->second.cull_bbox_min, mesh->second.cull_bbox_max,
+      if (mesh && mesh->fingerprint == item.fingerprint &&
+          mesh->cull_bounds_valid &&
+          BoundsOutsideFrustum(mesh->cull_bbox_min, mesh->cull_bbox_max,
                                item.world, scene.view_proj, 1.2f, 1.0f)) {
         ++vr_eye->frustum_skips;
         return true;
@@ -11502,6 +11568,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
           // CreateCommittedResource churn, SRV slot kept, tear-guarded).
           const auto up_t0 = PerfClock::now();
           if (UpdateGuestTexture2DInPlace(context, base, it->second)) {
+            ++g_r.texture_revision;
             const uint64_t up_ns = perf_ns_since(up_t0);
             hot_inline_budget_ns -= int64_t(up_ns);
             g_pw_tex_decode.Add(up_ns);
@@ -11514,6 +11581,7 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
                         frame_number, key);
           }
           RetireGuestTexture(it->second, context.device->CurrentSubmission());
+          ++g_r.texture_revision;
           g_r.tex_store.erase(it);
           it = g_r.tex_store.end();  // falls into the inline decode below
         } else {

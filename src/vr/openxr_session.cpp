@@ -1,3 +1,4 @@
+#include <chrono>
 #include "openxr_session.h"
 #define XR_USE_GRAPHICS_API_VULKAN
 #include <openxr/openxr_platform.h>
@@ -170,14 +171,19 @@ bool OpenXrSession::BeginFrame(TrackingFrame& frame) {
   if (frame_started_) throw std::logic_error("XR frame already begun");
   XrFrameWaitInfo wait{XR_TYPE_FRAME_WAIT_INFO};
   XrFrameState state{XR_TYPE_FRAME_STATE};
+  const auto wait_start = std::chrono::steady_clock::now();
   Check(xrWaitFrame(session_, &wait, &state), "Wait predicted frame");
+  const auto begin_start = std::chrono::steady_clock::now();
   XrFrameBeginInfo begin{XR_TYPE_FRAME_BEGIN_INFO};
   {
     auto queue_lock = LockQueue();
     Check(xrBeginFrame(session_, &begin), "Begin frame");
   }
   frame_started_ = true;
+  const auto tracking_start = std::chrono::steady_clock::now();
   frame = {};
+  frame.wait_ms = std::chrono::duration<double, std::milli>(begin_start - wait_start).count();
+  frame.begin_ms = std::chrono::duration<double, std::milli>(tracking_start - begin_start).count();
   frame.display_time = state.predictedDisplayTime;
   frame.display_period = state.predictedDisplayPeriod;
   frame.should_render = state.shouldRender == XR_TRUE;
@@ -189,6 +195,7 @@ bool OpenXrSession::BeginFrame(TrackingFrame& frame) {
   XrViewState views{XR_TYPE_VIEW_STATE};
   uint32_t count = 0;
   auto eyes_result = xrLocateViews(session_, &locate, &views, 2, &count, frame.eyes);
+  frame.tracking_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tracking_start).count();
   frame.view_flags = views.viewStateFlags;
   if (XR_FAILED(head_result) || XR_FAILED(eyes_result) || count != 2) EndFrame(frame);
   Check(head_result, "Locate head pose");

@@ -6,8 +6,9 @@ init=gpu[gpu.index('  bool cull_bounds_valid = num_verts'):gpu.index('  int min_
 guard=gpu[gpu.index('    const float cull_pos[3]'):gpu.index('    const auto decode_uv',gpu.index('    const float cull_pos[3]'))]
 part=s[s.index('bool CornersOutsideFrustum('):s.index('// Axis-aligned cube of half-extent')]
 cull=gpu[gpu.index('  const auto skip_outside_eye = '):gpu.index('  // Opaque items already passed')]
+lookup=gpu[gpu.index('  const auto rigid_item ='):gpu.index('  const auto draw_item =')]
 opaque=gpu[gpu.index('    if (skip_outside_eye(item)) continue;'):gpu.index('  // Publish the culled-ctx set')]
-code='''#include <cassert>\n#include <cmath>\n#include <limits>\n#include <algorithm>\n#include <array>\n#include <vector>\n#include <random>\n#include <unordered_map>\n#define SKATE3_HAS_OPENXR 1\n#define REXCVAR_GET(name) cull_enabled\nstruct DrawItem { float bbox_min[3], bbox_max[3], world[16]; bool unlit=false,skinned=false,ropa=false,cloth_quads=false; std::vector<float> bones; unsigned mesh=7; unsigned fingerprint=1; };\n'''+part+'''
+code='''#include <cassert>\n#include <cstdint>\n#include <cmath>\n#include <limits>\n#include <algorithm>\n#include <array>\n#include <vector>\n#include <random>\n#include <unordered_map>\n#define SKATE3_HAS_OPENXR 1\n#define REXCVAR_GET(name) cull_enabled\nstruct DrawItem { float bbox_min[3], bbox_max[3], world[16]; bool unlit=false,skinned=false,ropa=false,cloth_quads=false; std::vector<float> bones; unsigned mesh=7; unsigned fingerprint=1; };\n'''+part+'''
 struct Mesh { bool cull_bounds_valid=false; float cull_bbox_min[3],cull_bbox_max[3]; unsigned fingerprint=1; };
 Mesh Bounds(const std::vector<std::array<float,3>>& positions) {
  Mesh out; const auto num_verts=positions.size();
@@ -19,17 +20,33 @@ Mesh Bounds(const std::vector<std::array<float,3>>& positions) {
 }
 bool Cull(DrawItem candidate,Mesh mesh,bool enabled=true,bool vr=true) {
  bool cull_enabled=enabled;
- struct { std::unordered_map<unsigned,Mesh> meshes; } g_r;
+ using MeshBuffers=Mesh;
+ struct PreparedMesh { Mesh* buffers=nullptr; uint64_t frame=~uint64_t{0}, revision=0; };
+ struct { std::unordered_map<unsigned,Mesh> meshes; std::vector<PreparedMesh> stereo_meshes{1}; uint64_t mesh_revision=0; } g_r;
  g_r.meshes.emplace(candidate.mesh,mesh);
- struct { bool override_camera=true; unsigned frustum_skips=0; } eye;
+ struct { bool override_camera=true; unsigned frustum_skips=0,mesh_reuses=0; } eye;
  auto* vr_eye=vr?&eye:nullptr;
- struct { float view_proj[16]={1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}; } scene;
+ struct { float view_proj[16]={1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}; std::array<DrawItem,1> items; } scene;
+ scene.items[0]=candidate;
+ bool share_preparation=vr,second_vr_eye=false;
+ uint64_t frame_number=12;
+'''+lookup+'''
+ if (vr && rigid_item(candidate) && candidate.fingerprint==mesh.fingerprint) {
+   const auto& item=scene.items[0];
+   assert(lookup_mesh(item)->fingerprint==mesh.fingerprint);
+   second_vr_eye=true;
+   assert(lookup_mesh(item)->fingerprint==mesh.fingerprint && eye.mesh_reuses==1);
+   ++g_r.mesh_revision;
+   g_r.meshes.erase(item.mesh);
+   assert(!lookup_mesh(item));
+   g_r.meshes.emplace(item.mesh,mesh);
+ }
+
  int distance_checks=0;
  const auto view_dist2=[&](const DrawItem&) { ++distance_checks; return 0.f; };
  std::vector<std::pair<float,const DrawItem*>> opaque_items;
 '''+cull+'''
- const std::array items{candidate};
- for (const auto& item : items) {
+ for (const auto& item : scene.items) {
 '''+opaque+'''
  assert(opaque_items.size()==size_t(distance_checks));
  assert(opaque_items.empty()==(eye.frustum_skips==1));

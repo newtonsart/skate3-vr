@@ -1179,8 +1179,19 @@ struct RendererState {
     // layer on the arms).
     uint64_t piece = 0;
     uint64_t last_used_frame = 0;
+    const GuestTexture* prepared = nullptr;
+    uint64_t prepared_revision = 0;
+    uint32_t prepared_object = 0;
   };
   std::unordered_map<uint64_t, TexStickySite> tex_sticky;
+  uint64_t texture_revision = 0;
+  struct PreparedMesh {
+    MeshBuffers* buffers = nullptr;
+    uint64_t frame = ~uint64_t{0};
+    uint64_t revision = 0;
+  };
+  std::vector<PreparedMesh> stereo_meshes;
+  uint64_t mesh_revision = 0;
   // First frame a texture object resolved white-with-heal-in-flight:
   // brand-new items (no sticky fallback) skip drawing for a short window
   // instead of flashing white.

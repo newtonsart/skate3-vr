@@ -720,6 +720,9 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     s.UpdateResolution(!scene || photo_flat);
     if(!s.session) s.Bind(static_cast<rex::ui::vulkan::VulkanDevice*>(vulkan::NativeRhiGetVulkanDevice(input.device)));
     if (mode!=s.last_mode) {
+      s.trace.ResetWindow();
+      s.trace_last_submit={};
+      s.trace.have_scene=s.trace.have_yaw=false;
       s.recentered=false;
       s.window_facing={};
       s.room->Disable();
@@ -728,7 +731,9 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       REXLOG_INFO("VR: view mode {} (0 immersive, 1 window, 2 window + room)",mode);
     }
     const auto wait_start=std::chrono::steady_clock::now();
-    if(!s.session->PollEvents() || !s.session->BeginFrame(frame)) {
+    const bool ready=s.session->PollEvents();
+    const double poll_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-wait_start).count();
+    if(!ready || !s.session->BeginFrame(frame)) {
       s.trace_last_submit={}; s.trace.have_scene=s.trace.have_yaw=false;
       PublishVrControls({}); PublishWindowMotion({}); return s.BenchmarkDesktop(input,scene,render);
     }
@@ -808,7 +813,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     double render_ms[2]{},copy_ms[2]{};
     bool overlap_recorded=false;
     double scene_copy_ms[2]{};
-    uint32_t frustum_skips[2]{},world_draws[2]{};
+    uint32_t frustum_skips[2]{},world_draws[2]{},mesh_reuses=0,material_reuses=0;
     StereoShadows shadows;
     const bool compare=REXCVAR_GET(skate3_vr_compare_frame_work) && s.perf_samples<600;
     const bool share_work=compare ? s.perf_samples%2==0 : REXCVAR_GET(skate3_vr_share_frame_work);
@@ -825,6 +830,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       camera.render_scene=render_scene;
       camera.clear_hud_backdrop=!window && !photo && !object_editor && REXCVAR_GET(skate3_vr_clear_hud_backdrop);
       camera.capture_ui=capture && eye==0;
+      camera.share_preparation=!photo && !object_editor && !pause_menu;
       if(scene && !scene->items.empty() && scene->proj[0]!=0 && !photo_flat) {
         if (window) {
           const XrPosef view_reference{panel_pose.orientation,frame.head.pose.position};
@@ -853,6 +859,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       if (!eye) render_ms[eye]+=shared_scene_copy_ms;
       scene_copy_ms[eye]+=camera.scene_copy_ms;
       frustum_skips[eye]=camera.frustum_skips; world_draws[eye]=camera.world_draws;
+      mesh_reuses+=camera.mesh_reuses; material_reuses+=camera.material_reuses;
       if (left_pending) {
         // Right-eye commands are recorded, but share GPU targets with the left.
         const auto complete_start=std::chrono::steady_clock::now();
@@ -954,6 +961,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
           layers[layer_count++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&settings_panel);
         }
       }
+      const auto end_start=std::chrono::steady_clock::now();
       s.session->EndFrame(frame,layer_count,layers); begun=false;
       if (REXCVAR_GET(skate3_vr_perf_trace) && world_rendered && scene && !capture) {
         const auto now=std::chrono::steady_clock::now();
@@ -963,8 +971,12 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
         const double gpu=s.timing && s.gpu_render_ms[0]>=0 && s.gpu_render_ms[1]>=0 ?
             s.gpu_render_ms[0]+s.gpu_render_ms[1] : -1;
         const double period=double(frame.display_period)/1e6;
-        s.trace.Add(interval,period,render_ms[0]+render_ms[1],copy_ms[0]+copy_ms[1],xr_wait_ms,gpu,
-                    scene->generation,scene->view_proj,scene->proj);
+        const double end_ms=std::chrono::duration<double,std::milli>(now-end_start).count();
+        const double render=render_ms[0]+render_ms[1], transfer=copy_ms[0]+copy_ms[1];
+        const double other_ms=std::max(0.0,interval-render-transfer-xr_wait_ms-end_ms);
+        s.trace.Add(interval,period,render,transfer,xr_wait_ms,gpu,
+                    scene->generation,scene->view_proj,scene->proj,
+                    {poll_ms,frame.wait_ms,frame.begin_ms,frame.tracking_ms,end_ms,other_ms},uint32_t(scene->items.size()));
         if (s.trace.frames>=120) {
           const auto& t=s.trace;
           REXLOG_INFO("VR trace: frames={} scene={} items={} period={:.2f}ms submit-interval avg/max={:.2f}/{:.2f}ms over-1.5x={} repeated-scene={} yaw-travel={:.1f}deg CPU-render-max={:.2f}ms transfer-wait-max={:.2f}ms GPU-render-max={:.2f}ms GPU-samples={} XR-poll-and-begin-max={:.2f}ms",
@@ -974,6 +986,9 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
           REXLOG_INFO("VR trace worst interval: scene={} interval={:.2f}ms yaw-delta={:.2f}deg CPU-render={:.2f}ms transfer-wait={:.2f}ms GPU-render={:.2f}ms XR-poll-and-begin={:.2f}ms",
               t.worst_scene,t.interval_max,t.worst_yaw_delta<0?-1:t.worst_yaw_delta*180/3.14159265358979323846,
               t.worst_render,t.worst_wait,t.worst_gpu,t.worst_xr_wait);
+          const auto& xr=t.worst_xr;
+          REXLOG_INFO("VR trace XR worst: scene={} items={} mode={} poll={:.2f}ms wait={:.2f}ms begin={:.2f}ms tracking={:.2f}ms end={:.2f}ms other={:.2f}ms",
+              t.worst_scene,t.worst_items,mode,xr.poll,xr.wait,xr.begin,xr.tracking,xr.end,xr.other);
           s.trace.ResetWindow();
         }
       } else { s.trace_last_submit={}; s.trace.have_scene=s.trace.have_yaw=false; }
@@ -990,6 +1005,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
             s.gpu_render_ms[0],s.gpu_render_ms[1],s.gpu_copy_ms[0],s.gpu_copy_ms[1],scene_copy_ms[0],scene_copy_ms[1],share_work);
         if (s.timing) REXLOG_INFO("VR transfer CPU: submit L/R={:.3f}/{:.3f}ms image-acquire/wait L/R={:.3f}/{:.3f}ms completion L/R={:.3f}/{:.3f}ms overlap-recording={}",
             s.transfer_submit_ms[0],s.transfer_submit_ms[1],s.transfer_image_ms[0],s.transfer_image_ms[1],s.transfer_fence_ms[0],s.transfer_fence_ms[1],overlap_recorded);
+        REXLOG_INFO("VR preparation: right mesh-reuses={} material-reuses={}",mesh_reuses,material_reuses);
         REXLOG_INFO("VR visibility: captured={} world-draws L/R={}/{} frustum-skips L/R={}/{}",
             scene?scene->items.size():0,world_draws[0],world_draws[1],frustum_skips[0],frustum_skips[1]);
       }

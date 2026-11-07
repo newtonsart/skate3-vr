@@ -20,6 +20,8 @@ struct EyeCamera {
   StereoShadows* shadows=nullptr;
   double scene_copy_ms=0;
   uint32_t frustum_skips=0,world_draws=0;
+  bool share_preparation=true;
+  uint32_t mesh_reuses=0,material_reuses=0;
 };
 void InitializeGameVr();
 void ShutdownGameVr();
