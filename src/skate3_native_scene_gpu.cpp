@@ -8778,10 +8778,11 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
       const auto deadline =
           std::chrono::steady_clock::now() + std::chrono::milliseconds(warmup_ms);
       WarmCounters wc;
-      for (const DrawItem& item : scene.items) {
-        WarmItemResources(context, base, frame_number, item, deadline, wc);
+      auto item = scene.items.begin();
+      for (; item != scene.items.end() && PerfClock::now() < deadline; ++item) {
+        WarmItemResources(context, base, frame_number, *item, deadline, wc);
       }
-      if (wc.deferred != 0) {
+      if (wc.deferred != 0 || item != scene.items.end()) {
         // Still behind: keep the settle pass (and the draw-path budget
         // clamp) alive until a frame clears with budget to spare - but never
         // past the hard cap: revalidation-churning content (streamed
@@ -8795,8 +8796,8 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
         } else if (g_settle_until_frame <= frame_number + 1) {
           REXLOG_INFO(
               "native-scene: settle pass CAPPED {} frames after takeover with {} "
-              "deferred (revalidation churn?) - draw-path budgets resume",
-              frame_number - g_takeover_frame, wc.deferred);
+              "resources deferred and {} items unvisited - draw-path budgets resume",
+              frame_number - g_takeover_frame, wc.deferred, scene.items.end() - item);
         }
       }
       if (wc.decodes > 0) {

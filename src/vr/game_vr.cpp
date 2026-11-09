@@ -407,6 +407,7 @@ struct State {
     stages.copy_after_wait=gpu_offset(copy[0])-host_offset(wait_start);
     stages.fence_after_copy=host_offset(wait_end)-gpu_offset(copy[1]);
     stages.clock_error=double(deviation)/1e6;
+    stages.fence_entry_qpc=wait_start;
   }
   bool BenchmarkDesktop(const NativeGuestOutputRenderContext& input,
                         std::shared_ptr<const native_scene::FrameScene> scene,
@@ -537,7 +538,9 @@ struct State {
       const auto submit_start=std::chrono::steady_clock::now();
       // Render to our own image while XR waits for a compositor-owned image.
       if (!settings) {
+        stages.native_submit_entry_qpc=ReadFenceCounter();
         if (!vulkan::NativeRhiFlushForExternal(context.device,false)) throw std::runtime_error("Game GPU submission failed");
+        stages.native_submit_exit_qpc=ReadFenceCounter();
         native_pending=true;
       }
       const auto image_start=std::chrono::steady_clock::now();
@@ -1143,9 +1146,13 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
                 stages.native_submit,stages.queue_lock,stages.acquire,stages.image_wait,stages.record,stages.queue_submit,
                 stages.fence,stages.queries,stages.release,stages.gpu);
             if (stages.clock_error>=0) {
-              REXLOG_INFO("VR trace GPU timeline: scene={} eye={} draw-start/end-from-fence-entry={:.2f}/{:.2f}ms copy-start-from-fence-entry={:.2f}ms fence-return-from-copy-end={:.2f}ms clock-error={:.3f}ms",
+              REXLOG_INFO("VR trace GPU timeline: scene={} eye={} draw-start/end-from-fence-entry={:.2f}/{:.2f}ms copy-start-from-fence-entry={:.2f}ms fence-return-from-copy-end={:.2f}ms clock-error={:.3f}ms fence-entry-QPC={}",
                   t.worst_transfer_scene,eye,stages.draw_after_wait,stages.draw_end_after_wait,stages.copy_after_wait,
-                  stages.fence_after_copy,stages.clock_error);
+                  stages.fence_after_copy,stages.clock_error,stages.fence_entry_qpc);
+            }
+            if (stages.native_submit>=2 && stages.native_submit_entry_qpc && stages.native_submit_exit_qpc) {
+              REXLOG_INFO("VR trace Vulkan submit: scene={} eye={} entry-QPC={} exit-QPC={}",
+                  t.worst_transfer_scene,eye,stages.native_submit_entry_qpc,stages.native_submit_exit_qpc);
             }
           };
           log_transfer("L",t.worst_transfer.eyes[0]);
