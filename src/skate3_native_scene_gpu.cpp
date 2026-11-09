@@ -909,6 +909,10 @@ void LogMeshDecodeRefusal(const DrawItem& item, const char* what,
   }
 }
 
+struct MeshDecodeTiming {
+  uint64_t buffers = 0, vertices = 0, shape = 0, sheets = 0;
+};
+
 // Decode guest vertices into {float3 position, float2 uv, float2 uv2,
 // unorm4 blend weights, u8x4 blend indices, float3 normal, float2 decal_uv}
 // (56-byte stride). decal_uv = the 3rd/4th halves of a half4 first texcoord
@@ -922,7 +926,7 @@ void LogMeshDecodeRefusal(const DrawItem& item, const char* what,
 bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
                 MeshBuffers& out, const uint8_t* vb_payload = nullptr,
                 const uint8_t* ib_payload = nullptr, size_t vb_payload_bytes = 0,
-                size_t ib_payload_bytes = 0) {
+                size_t ib_payload_bytes = 0, MeshDecodeTiming* timing = nullptr) {
   // KI-27: bound every vertex/index read before touching the payload. The
   // element offsets come from the guest vertex declaration independently of
   // its stride byte, so an element placed past the stride over-read the
@@ -960,8 +964,10 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
     }
     ib_payload = ib_scratch.data();
   }
+  const auto buffers_start = timing ? PerfClock::now() : PerfClock::time_point{};
   nrhi::Buffer* vb = AcquireMeshUploadBuffer(device, size_t(num_verts) * 56);
   nrhi::Buffer* ib = AcquireMeshUploadBuffer(device, size_t(item.ib_count) * 2);
+  if (timing) timing->buffers += PerfNsSince(buffers_start);
   if (!vb || !ib) {
     PoolMeshBuffer(device, vb);
     PoolMeshBuffer(device, ib);
@@ -993,8 +999,10 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
   // Map both upload buffers up front so a Map() failure fails the decode
   // before anything is written. A buffer that failed to map is released,
   // not pooled (the pool would hand the same buffer straight back).
+  const auto map_start = timing ? PerfClock::now() : PerfClock::time_point{};
   float* dst = static_cast<float*>(device->Map(vb));
   uint16_t* dst_ib = dst != nullptr ? static_cast<uint16_t*>(device->Map(ib)) : nullptr;
+  if (timing) timing->buffers += PerfNsSince(map_start);
   if (dst == nullptr || dst_ib == nullptr) {
     if (dst != nullptr) {
       device->Unmap(vb);
@@ -1005,6 +1013,7 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
     LogMeshDecodeRefusal(item, "upload Map failed", dst == nullptr ? "vb" : "ib", total);
     return false;
   }
+  const auto vertex_start = timing ? PerfClock::now() : PerfClock::time_point{};
   for (uint32_t v = 0; v < num_verts; ++v) {
     const uint8_t* p = src_vb + size_t(v) * item.stride + item.pos_offset;
     float x = 0.0f, y = 0.0f, z = 0.0f;
@@ -1281,6 +1290,7 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
     dst[v * 14 + 10] = n3[1];
     dst[v * 14 + 11] = n3[2];
   }
+  if (timing) timing->vertices = PerfNsSince(vertex_start);
   // Dynobj v2 layout telemetry (first few meshes): which tangent-frame
   // source the props carry decides between the packed authored frame and
   // the shader's screen-space fallback.
@@ -1324,7 +1334,9 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
   // the excursion scales with the guest period; emulated pairs pose N with
   // shape N and shows none of it).
   if (item.ropa) {
+    const auto shape_start = timing ? PerfClock::now() : PerfClock::time_point{};
     out.ropa_verts.assign(dst, dst + size_t(num_verts) * 14);
+    if (timing) timing->shape = PerfNsSince(shape_start);
   }
   device->Unmap(vb);
   // Blend indices outside the captured palette read garbage rows and mangle
@@ -1379,6 +1391,7 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
   // double-sided (banners are 100%); O(T^2) but only for <=8192-index
   // static tri-list meshes and only once per decode.
   bool two_sided = false;
+  const auto sheet_start = timing ? PerfClock::now() : PerfClock::time_point{};
   if (detect_sheet) {
     struct SheetTri {
       float c[3];
@@ -1484,6 +1497,7 @@ bool DecodeMesh(nrhi::Device* device, uint8_t* base, const DrawItem& item,
       }
     }
   }
+  if (timing) timing->sheets = PerfNsSince(sheet_start);
   device->Unmap(ib);
 
   out.vb = vb;
@@ -1811,6 +1825,7 @@ bool UploadGeneratedMips(const NativeGuestOutputRenderContext& context, uint8_t*
 thread_local uint64_t g_tex_dec_create_ns = 0;
 thread_local uint64_t g_tex_dec_gen_ns = 0;
 thread_local uint64_t g_tex_dec_copy_ns = 0;
+thread_local uint64_t g_tex_dec_record_ns = 0;
 
 bool EnsureGuestTextureFromWords(const NativeGuestOutputRenderContext& context,
                                  uint8_t* base, const uint32_t words[6],
@@ -1818,6 +1833,7 @@ bool EnsureGuestTextureFromWords(const NativeGuestOutputRenderContext& context,
   g_tex_dec_create_ns = 0;
   g_tex_dec_gen_ns = 0;
   g_tex_dec_copy_ns = 0;
+  g_tex_dec_record_ns = 0;
   std::memcpy(out.fetch_words, words, 6 * sizeof(uint32_t));
 
   xenos::xe_gpu_texture_fetch_t fetch = {};
@@ -2204,6 +2220,7 @@ bool EnsureGuestTextureFromWords(const NativeGuestOutputRenderContext& context,
     }
   } else {
     // Record the upload copies into the deferred command list.
+    const auto record_t0 = PerfClock::now();
     for (uint32_t m = 0; m < mip_count; ++m) {
       const MipPlan& p = plans[m];
       context.cmd->CopyBufferToTexture(out.texture, m, 0, out.upload, p.offset,
@@ -2226,6 +2243,7 @@ bool EnsureGuestTextureFromWords(const NativeGuestOutputRenderContext& context,
     out.srv_format = srv.format;
     out.srv_mips = mip_count;
     out.srv = device->CreateTextureView(out.texture, srv);
+    g_tex_dec_record_ns += PerfNsSince(record_t0);
     if (out.srv == nullptr) {
       return false;
     }
@@ -4774,7 +4792,7 @@ bool EnsureHallOfMeatDepth(const NativeGuestOutputRenderContext& context) {
 bool EnsurePipeline(const NativeGuestOutputRenderContext& context) {
   if (g_r.failed) return false;
   nrhi::Device* device = context.device;
-  g_r.device = device;
+  if (g_r.device != device) g_r.device = device;
 
   if (!EnsureRootSignature(context)) {
     return false;
@@ -4891,6 +4909,8 @@ namespace {
 struct WarmCounters {
   uint32_t decodes = 0;
   uint32_t deferred = 0;
+  uint64_t mesh_ns = 0, mesh_buffers_ns = 0, texture_ns = 0;
+  uint64_t texture_copy_ns = 0, texture_create_ns = 0, texture_mips_ns = 0, texture_record_ns = 0;
 };
 
 void WarmItemResources(const NativeGuestOutputRenderContext& context, uint8_t* base,
@@ -4933,7 +4953,25 @@ void WarmItemResources(const NativeGuestOutputRenderContext& context, uint8_t* b
     } else {
       ++wc.decodes;
       MeshBuffers buffers;
-      if (DecodeMesh(g_r.device, base, item, buffers)) {
+      MeshDecodeTiming timing;
+      const auto mesh_start = PerfClock::now();
+      const bool valid = DecodeMesh(g_r.device, base, item, buffers, nullptr, nullptr, 0, 0,
+                                    &timing);
+      const auto mesh_ns = PerfNsSince(mesh_start);
+      wc.mesh_ns += mesh_ns;
+      wc.mesh_buffers_ns += timing.buffers;
+      if (mesh_ns >= 8'000'000 && REXCVAR_GET(skate3_native_render_scene_perf_log)) {
+        static uint32_t slow_meshes = 0;
+        if (++slow_meshes <= 24 || (slow_meshes & 63u) == 0) {
+          REXLOG_INFO("native-scene: slow settle mesh={:08X} total={:.2f}ms buffers={:.2f}ms "
+                      "vertices={:.2f}ms shape={:.2f}ms sheets={:.2f}ms verts={} indices={}",
+                      item.mesh, double(mesh_ns) / 1e6, double(timing.buffers) / 1e6,
+                      double(timing.vertices) / 1e6, double(timing.shape) / 1e6,
+                      double(timing.sheets) / 1e6,
+                      item.stride ? item.vb_bytes / item.stride : 0, item.ib_count);
+        }
+      }
+      if (valid) {
         buffers.fingerprint = item.fingerprint;
         buffers.last_used_frame = frame_number;
         g_r.meshes.emplace(item.mesh, buffers);
@@ -4941,6 +4979,17 @@ void WarmItemResources(const NativeGuestOutputRenderContext& context, uint8_t* b
       // Failures retry through the draw path (logged + counted there).
     }
   }
+
+  const auto decode_texture = [&](const uint32_t words[6], GuestTexture& gt) {
+    ++wc.decodes;
+    const auto texture_start = PerfClock::now();
+    EnsureGuestTextureFromWords(context, base, words, gt);
+    wc.texture_ns += PerfNsSince(texture_start);
+    wc.texture_copy_ns += g_tex_dec_copy_ns;
+    wc.texture_create_ns += g_tex_dec_create_ns;
+    wc.texture_mips_ns += g_tex_dec_gen_ns;
+    wc.texture_record_ns += g_tex_dec_record_ns;
+  };
 
   const auto warm_texture = [&](uint32_t tex_ptr) {
     if (tex_ptr == 0) {
@@ -4980,9 +5029,8 @@ void WarmItemResources(const NativeGuestOutputRenderContext& context, uint8_t* b
       ++wc.deferred;
       return;
     }
-    ++wc.decodes;
     GuestTexture gt;
-    EnsureGuestTextureFromWords(context, base, words, gt);
+    decode_texture(words, gt);
     if (!gt.valid) {
       // Negative-cache exactly like the draw path so a permanently
       // unreadable payload cannot hold warmup open.
@@ -5006,9 +5054,8 @@ void WarmItemResources(const NativeGuestOutputRenderContext& context, uint8_t* b
       ++wc.deferred;
       return;
     }
-    ++wc.decodes;
     GuestTexture gt;
-    EnsureGuestTextureFromWords(context, base, words, gt);
+    decode_texture(words, gt);
     gt.last_used_frame = frame_number;
     g_r.tex_store.emplace(fkey, gt);
   };
@@ -5410,7 +5457,7 @@ void PrewarmWorkerLoop() {
 }
 
 // Lazily start the decode workers (process-lifetime, parked on the queue's
-// condition variable when idle). Only started once the pipeline exists;
+// condition variable when idle). Only started once the device exists;
 // the workers create GPU resources through g_r.device (thread-safe).
 void EnsurePrewarmWorkers() {
   if (g_r.device == nullptr ||
@@ -5435,7 +5482,8 @@ void EnsurePrewarmWorkers() {
 // Microseconds per item, safe to run every frame (loading, settle and
 // gameplay alike).
 void PrewarmCommit(const NativeGuestOutputRenderContext& context,
-                   uint64_t frame_number, bool loading = false) {
+                   uint64_t frame_number, bool loading = false,
+                   bool flat_vr = false) {
   {
     std::scoped_lock lock(g_prewarm_out_mutex, g_prewarm_mutex);
     if (!g_prewarm_retry.empty()) {
@@ -5500,6 +5548,8 @@ void PrewarmCommit(const NativeGuestOutputRenderContext& context,
   // For the payload-stability verify below (SEH-guarded sampled reads).
   uint8_t* verify_base = g_guest_base.load(std::memory_order_relaxed);
   for (PrewarmResult& r : done) {
+    // Boot-time registrations can arrive before the guest payload is ready.
+    const bool defer_failed = flat_vr && !r.miss;
     if (r.mesh_valid) {
       auto mit = g_r.meshes.find(r.item.mesh);
       const bool superseded =
@@ -5553,7 +5603,7 @@ void PrewarmCommit(const NativeGuestOutputRenderContext& context,
         g_r.meshes.emplace(r.item.mesh, r.buffers);
       }
       g_mesh_miss_fail.erase(r.item.mesh);
-    } else if (r.item.mesh != 0) {
+    } else if (r.item.mesh != 0 && !defer_failed) {
       // Failed mesh decode (KI-67): back off this payload's next draw-path
       // miss instead of re-decoding it every visible frame.
       if (g_mesh_miss_fail.size() >= kMeshMissFailCap) {
@@ -5594,6 +5644,11 @@ void PrewarmCommit(const NativeGuestOutputRenderContext& context,
         t.valid = false;
         t.verify_failed = true;
         g_heal_verify_fail.fetch_add(1, std::memory_order_relaxed);
+      }
+      if (defer_failed && !t.valid) {
+        if (t.gt.texture) g_r.device->DestroyDeferred(t.gt.texture);
+        if (t.gt.upload) g_r.device->DestroyDeferred(t.gt.upload);
+        continue;
       }
       if (t.cube) {
         // Environment cube: lands in the cube cache. Cubes are static
@@ -8764,12 +8819,16 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
           std::lock_guard<std::mutex> lock(g_prewarm_mutex);
           queued = g_prewarm_queue.size();
         }
+        const auto resident = std::count_if(scene.items.begin(), scene.items.end(), [](const DrawItem& item) {
+          const auto mesh = g_r.meshes.find(item.mesh);
+          return mesh != g_r.meshes.end() && mesh->second.fingerprint == item.fingerprint;
+        });
         REXLOG_INFO(
             "native-scene: taking over natively ({} items; prewarm {} done / {} dropped "
-            "/ {} queued / {} miss retries)",
+            "/ {} queued / {} miss retries; {} meshes ready)",
             scene.items.size(), g_prewarm_done.load(std::memory_order_relaxed),
             g_prewarm_dropped.load(std::memory_order_relaxed), queued,
-            g_prewarm_miss_retries.load(std::memory_order_relaxed));
+            g_prewarm_miss_retries.load(std::memory_order_relaxed), resident);
       }
     }
     settling = frame_number < g_settle_until_frame;
@@ -8805,7 +8864,21 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
       }
       g_warm_decodes.fetch_add(wc.decodes, std::memory_order_relaxed);
       g_warm_deferred.fetch_add(wc.deferred, std::memory_order_relaxed);
-      g_pw_settle.Add(perf_ns_since(settle_t0));
+      const uint64_t settle_ns = perf_ns_since(settle_t0);
+      g_pw_settle.Add(settle_ns);
+      if (settle_ns >= 12'000'000 && REXCVAR_GET(skate3_native_render_scene_perf_log)) {
+        static uint32_t slow_settles = 0;
+        if (++slow_settles <= 24 || (slow_settles & 63u) == 0) {
+          REXLOG_INFO("native-scene: slow settle scene={} total={:.2f}ms mesh={:.2f}ms mesh-buffers={:.2f}ms "
+                      "texture={:.2f}ms texture-guest-copy={:.2f}ms texture-create={:.2f}ms texture-mips={:.2f}ms "
+                      "texture-upload-record={:.2f}ms decodes={} unvisited={}",
+                      scene.generation, double(settle_ns) / 1e6, double(wc.mesh_ns) / 1e6,
+                      double(wc.mesh_buffers_ns) / 1e6, double(wc.texture_ns) / 1e6,
+                      double(wc.texture_copy_ns) / 1e6, double(wc.texture_create_ns) / 1e6,
+                      double(wc.texture_mips_ns) / 1e6, double(wc.texture_record_ns) / 1e6,
+                      wc.decodes, scene.items.end() - item);
+        }
+      }
     }
   }
 
@@ -13160,8 +13233,21 @@ void Install() {
               PerfClock::now().time_since_epoch()).count();
           if (!skate3::vr::CanPresentWorld(scene && !scene->items.empty(),
               now-g_last_publish_ns.load(),in_menus,
-              rex::cvar::Query<bool>("skate3_vr_pause_in_world"),seen_gameplay))
+              rex::cvar::Query<bool>("skate3_vr_pause_in_world"),seen_gameplay)) {
+            // Flat XR loading uses the guest image, so RenderScene cannot
+            // start the registered-mesh prewarm or commit its results here.
+            if (context.backend == NativeGuestOutputBackend::kVulkan && SceneEnabled() &&
+                !g_r.failed && REXCVAR_GET(skate3_native_render_scene_prewarm_budget_ms) > 0) {
+              if (auto* base = g_guest_base.load(std::memory_order_relaxed)) {
+                ArmGuestReadRecoveryForThread(base);
+                if (!g_r.device) g_r.device = context.device;
+                EnsurePrewarmWorkers();
+                PrewarmCommit(context, g_frames_rendered.load(std::memory_order_relaxed),
+                              /*loading=*/false, /*flat_vr=*/true);
+              }
+            }
             return false;
+          }
         }
         return skate3::vr::RenderStereo(context, std::move(scene), &RenderScene);
       }, nullptr);
