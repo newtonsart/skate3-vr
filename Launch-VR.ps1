@@ -129,6 +129,9 @@ function Get-VrLaunchOptions {
         ('--log_file="{0}\skate3.log"' -f $saveProfile[0].UserRoot))
     if ($Setup) { $arguments += @('--skate3_setup_only=true','--skate3_vr=false','--fullscreen=false') }
     else { $arguments += @('--skate3_vr=true',"--skate3_vr_mode=$Mode",'--skate3_native_render_scene_msaa=1','--skate3_vr_share_frame_work=true','--skate3_vr_perf_trace=true','--skate3_vr_gpu_timing=true','--skate3_native_render_scene_perf_log=true','--skate3_native_render_scene_perf_interval=120') }
+    if (-not $Setup -and $Mode -eq 0 -and $env:SKATE3_VR_PREFETCH_FRAME -eq '1') {
+        $arguments += '--skate3_vr_prefetch_frame=true'
+    }
     return @{ FilePath = $installation.Executable; WorkingDirectory = $installation.Root; ArgumentList = $arguments }
 }
 

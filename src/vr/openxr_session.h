@@ -2,7 +2,10 @@
 
 #include "openxr_context.h"
 #include <vulkan/vulkan.h>
+#include <chrono>
 #include <mutex>
+#include <semaphore>
+#include <thread>
 
 namespace skate3::vr {
 
@@ -11,6 +14,8 @@ struct TrackingFrame {
   XrDuration display_period = 0;
   bool should_render = false;
   double wait_ms=0, begin_ms=0, tracking_ms=0;
+  double wait_call_ms=0, wait_ready_age_ms=0;
+  bool prefetched=false;
   XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
   XrViewStateFlags view_flags = 0;
   XrView eyes[2] = {{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
@@ -28,6 +33,8 @@ class OpenXrSession {
   void Bind(VkInstance instance, VkPhysicalDevice gpu, VkDevice device, uint32_t family,
             std::recursive_mutex* queue_mutex = nullptr);
   bool PollEvents();
+  void PrefetchFrame();
+  void DrainFrameWait();
   bool BeginFrame(TrackingFrame& frame);
   void EndFrame(const TrackingFrame& frame, uint32_t count = 0,
                 const XrCompositionLayerBaseHeader* const* layers = nullptr);
@@ -42,6 +49,7 @@ class OpenXrSession {
 
  private:
   void Destroy();
+  XrResult WaitFrame(XrFrameState& state);
   void CreateSpaces(uint32_t family);
   std::unique_lock<std::recursive_mutex> LockQueue() const;
   const OpenXrContext& context_;
@@ -58,5 +66,11 @@ class OpenXrSession {
   bool owns_device_ = false;
   bool frame_started_ = false;
   std::recursive_mutex* queue_mutex_ = nullptr;
+  XrFrameState prefetched_state_{XR_TYPE_FRAME_STATE};
+  XrResult prefetched_result_=XR_SUCCESS;
+  std::chrono::steady_clock::time_point wait_started_, wait_ready_;
+  bool wait_pending_=false;
+  std::binary_semaphore wait_request_{0}, wait_complete_{0};
+  std::jthread wait_worker_;
 };
 }  // namespace skate3::vr

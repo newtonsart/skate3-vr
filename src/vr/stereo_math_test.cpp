@@ -31,8 +31,16 @@ int main() {
     Check(trace.interval_max==22 && trace.render_max==5 && trace.wait_max==7 && trace.xr_wait_max==9 && trace.gpu_max==4 && trace.gpu_samples==1);
     Check(trace.worst_scene==1 && trace.worst_render==5 && trace.worst_wait==7 && trace.worst_xr_wait==9 && trace.worst_gpu==4 && std::abs(trace.worst_yaw_delta-3.14159265358979323846/2)<1e-6);
     Check(std::abs(trace.yaw_travel-3.14159265358979323846/2)<1e-6);
+    skate3::vr::FrameTransfers transfer;
+    transfer.eyes[0].fence=6;
+    transfer.overlay.total=4;
+    trace.Add(21,11,4,5,2,1,3,vp,proj,{.1,1,.2,.3,.3,4,5,2,true},2600,{},transfer);
+    Check(trace.worst_scene==1 && trace.worst_transfer_scene==3 && trace.worst_transfer_items==2600);
+    Check(trace.transfer_max==9 && trace.worst_transfer.eyes[0].fence==6);
+    Check(trace.prefetched_frames==1 && trace.exposed_wait_sum==1 && trace.wait_call_sum==5 && trace.wait_ready_age_max==2);
     trace.ResetWindow();
     Check(trace.worst_xr.wait==0 && trace.worst_xr.end==0);
+    Check(trace.transfer_max==0 && trace.prefetched_frames==0 && trace.worst_transfer_scene==0);
     trace.Add(11,11,1,1,1,0,2,vp,proj);
     Check(trace.frames==1 && trace.slow==0 && trace.repeated==0 && trace.yaw_travel==0);
   }

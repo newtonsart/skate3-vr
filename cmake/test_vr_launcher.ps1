@@ -74,6 +74,16 @@ try {
         Assert ($options.ArgumentList -contains ('--game_data_root="{0}\game"' -f $fixture)) 'Game path lost its quotes'
         Assert ($options.ArgumentList -contains ('--user_data_root="{0}\out\runtime-test"' -f $fixture)) 'User profile changed'
     }
+    $savedPrefetch = $env:SKATE3_VR_PREFETCH_FRAME
+    try {
+        $env:SKATE3_VR_PREFETCH_FRAME = '1'
+        foreach ($mode in 0..2) {
+            $options = Get-VrLaunchOptions -Root $fixture -Mode $mode
+            Assert (($options.ArgumentList -contains '--skate3_vr_prefetch_frame=true') -eq ($mode -eq 0)) 'XR prefetch must be immersive only'
+        }
+        $options = Get-VrLaunchOptions -Root $fixture -Setup
+        Assert ($options.ArgumentList -notcontains '--skate3_vr_prefetch_frame=true') 'Setup must skip XR prefetch'
+    } finally { $env:SKATE3_VR_PREFETCH_FRAME = $savedPrefetch }
     Assert (-not (Test-Path -LiteralPath (Join-Path $fixture 'out\runtime-test'))) 'Launcher modified user data'
     foreach ($mode in 0..2) {
         $form = New-VrLauncherForm -Root $fixture

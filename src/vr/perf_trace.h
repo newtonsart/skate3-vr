@@ -6,9 +6,26 @@
 namespace skate3::vr {
 struct XrFrameTiming {
   double poll=0, wait=0, begin=0, tracking=0, end=0, other=0;
+  double wait_call=0, wait_ready_age=0;
+  bool prefetched=false;
+};
+struct FrameWorkTiming {
+  double between_callbacks=0, before_xr=0, controllers=0, setup=0, eye_setup=0, layers=0, overlay=0;
+};
+struct TransferTiming {
+  double native_submit=0, acquire=0, image_wait=0, record=0, queue_submit=0;
+  double fence=0, queries=0, release=0, queue_lock=0, gpu=-1, total=0;
+};
+struct FrameTransfers {
+  TransferTiming eyes[2], overlay;
 };
 struct PerfTrace {
   XrFrameTiming worst_xr;
+  FrameWorkTiming worst_work;
+  FrameTransfers worst_transfer;
+  double transfer_max=0, exposed_wait_sum=0, wait_call_sum=0, wait_ready_age_max=0;
+  uint64_t worst_transfer_scene=0;
+  uint32_t worst_transfer_items=0, prefetched_frames=0;
   uint32_t frames=0, intervals=0, slow=0, repeated=0, gpu_samples=0;
   double interval_sum=0, interval_max=0, render_max=0, wait_max=0, xr_wait_max=0, gpu_max=0;
   double yaw_travel=0, last_yaw=0;
@@ -19,7 +36,8 @@ struct PerfTrace {
   bool have_scene=false, have_yaw=false;
 
   void Add(double interval, double period, double render, double wait, double xr_wait, double gpu,
-           uint64_t scene, const float* vp, const float* proj, XrFrameTiming xr = {}, uint32_t items = 0) {
+           uint64_t scene, const float* vp, const float* proj, XrFrameTiming xr = {}, uint32_t items = 0,
+           FrameWorkTiming work = {}, const FrameTransfers& transfers = {}) {
     ++frames;
     const bool worst=interval>interval_max;
     if (interval>0) {
@@ -30,6 +48,19 @@ struct PerfTrace {
     }
     render_max=std::max(render_max,render);
     wait_max=std::max(wait_max,wait);
+    const double transfer=wait+transfers.overlay.total;
+    if (transfer>transfer_max) {
+      transfer_max=transfer;
+      worst_transfer=transfers;
+      worst_transfer_scene=scene;
+      worst_transfer_items=items;
+    }
+    if (xr.prefetched) {
+      ++prefetched_frames;
+      exposed_wait_sum+=xr.wait;
+      wait_call_sum+=xr.wait_call;
+      wait_ready_age_max=std::max(wait_ready_age_max,xr.wait_ready_age);
+    }
     xr_wait_max=std::max(xr_wait_max,xr_wait);
     if (gpu>=0) { ++gpu_samples; gpu_max=std::max(gpu_max,gpu); }
     if (have_scene && scene==last_scene) ++repeated;
@@ -42,10 +73,13 @@ struct PerfTrace {
       if (have_yaw) { yaw_delta=std::abs(std::remainder(yaw-last_yaw,2*3.14159265358979323846)); yaw_travel+=yaw_delta; }
       last_yaw=yaw; have_yaw=true;
     } else have_yaw=false;
-    if (worst) { worst_xr=xr; worst_items=items; worst_render=render; worst_wait=wait; worst_xr_wait=xr_wait; worst_gpu=gpu; worst_yaw_delta=yaw_delta; worst_scene=scene; }
+    if (worst) { worst_xr=xr; worst_work=work; worst_items=items; worst_render=render; worst_wait=wait; worst_xr_wait=xr_wait; worst_gpu=gpu; worst_yaw_delta=yaw_delta; worst_scene=scene; }
   }
   void ResetWindow() {
     worst_xr={}; worst_items=0;
+    worst_work={}; worst_transfer={};
+    transfer_max=exposed_wait_sum=wait_call_sum=wait_ready_age_max=0;
+    worst_transfer_scene=worst_transfer_items=prefetched_frames=0;
     frames=intervals=slow=repeated=gpu_samples=0;
     interval_sum=interval_max=render_max=wait_max=xr_wait_max=gpu_max=yaw_travel=0;
     worst_render=worst_wait=worst_xr_wait=0; worst_gpu=worst_yaw_delta=-1; worst_scene=0;

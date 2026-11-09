@@ -30,6 +30,12 @@ OpenXrSession::OpenXrSession(const OpenXrContext& context) : context_(context) {
 OpenXrSession::~OpenXrSession() { Destroy(); }
 
 void OpenXrSession::Destroy() {
+  DrainFrameWait();
+  if (wait_worker_.joinable()) {
+    wait_worker_.request_stop();
+    wait_request_.release();
+    wait_worker_.join();
+  }
   if (device_ && owns_device_) vkDeviceWaitIdle(device_);
   if (view_) xrDestroySpace(view_);
   if (local_) xrDestroySpace(local_);
@@ -154,6 +160,7 @@ bool OpenXrSession::PollEvents() {
           Check(xrBeginSession(session_, &begin), "Begin stereo session");
           running_ = true;
         } else if (state_ == XR_SESSION_STATE_STOPPING && running_) {
+          DrainFrameWait();
           Check(xrEndSession(session_), "End session");
           running_ = false;
         } else if (state_ == XR_SESSION_STATE_EXITING || state_ == XR_SESSION_STATE_LOSS_PENDING) {
@@ -163,16 +170,55 @@ bool OpenXrSession::PollEvents() {
     }
     event = {XR_TYPE_EVENT_DATA_BUFFER};
   }
+  if (exiting_) DrainFrameWait();
   return !exiting_;
+}
+
+XrResult OpenXrSession::WaitFrame(XrFrameState& state) {
+  XrFrameWaitInfo wait{XR_TYPE_FRAME_WAIT_INFO};
+  return xrWaitFrame(session_, &wait, &state);
+}
+
+void OpenXrSession::PrefetchFrame() {
+  if (!running_ || exiting_ || wait_pending_) return;
+  // Only the wait runs here. The render thread consumes its state before beginning and locating views.
+  if (!wait_worker_.joinable()) {
+    wait_worker_=std::jthread([this](std::stop_token stop) {
+      for (;;) {
+        wait_request_.acquire();
+        if (stop.stop_requested()) return;
+        prefetched_state_={XR_TYPE_FRAME_STATE};
+        wait_started_=std::chrono::steady_clock::now();
+        prefetched_result_=WaitFrame(prefetched_state_);
+        wait_ready_=std::chrono::steady_clock::now();
+        wait_complete_.release();
+      }
+    });
+  }
+  wait_pending_=true;
+  wait_request_.release();
+}
+
+void OpenXrSession::DrainFrameWait() {
+  if (wait_pending_) {
+    wait_complete_.acquire();
+    wait_pending_=false;
+  }
 }
 
 bool OpenXrSession::BeginFrame(TrackingFrame& frame) {
   if (!running_ || exiting_) return false;
   if (frame_started_) throw std::logic_error("XR frame already begun");
-  XrFrameWaitInfo wait{XR_TYPE_FRAME_WAIT_INFO};
   XrFrameState state{XR_TYPE_FRAME_STATE};
   const auto wait_start = std::chrono::steady_clock::now();
-  Check(xrWaitFrame(session_, &wait, &state), "Wait predicted frame");
+  const bool prefetched=wait_pending_;
+  if (prefetched) {
+    DrainFrameWait();
+    Check(prefetched_result_, "Wait predicted frame");
+    state=prefetched_state_;
+  } else {
+    Check(WaitFrame(state), "Wait predicted frame");
+  }
   const auto begin_start = std::chrono::steady_clock::now();
   XrFrameBeginInfo begin{XR_TYPE_FRAME_BEGIN_INFO};
   {
@@ -183,6 +229,9 @@ bool OpenXrSession::BeginFrame(TrackingFrame& frame) {
   const auto tracking_start = std::chrono::steady_clock::now();
   frame = {};
   frame.wait_ms = std::chrono::duration<double, std::milli>(begin_start - wait_start).count();
+  frame.prefetched=prefetched;
+  frame.wait_call_ms=prefetched ? std::chrono::duration<double,std::milli>(wait_ready_-wait_started_).count() : frame.wait_ms;
+  frame.wait_ready_age_ms=prefetched ? std::chrono::duration<double,std::milli>(begin_start-wait_ready_).count() : 0;
   frame.begin_ms = std::chrono::duration<double, std::milli>(tracking_start - begin_start).count();
   frame.display_time = state.predictedDisplayTime;
   frame.display_period = state.predictedDisplayPeriod;
@@ -224,6 +273,7 @@ bool OpenXrSession::SampleTracking(TrackingFrame& frame) {
 }
 
 void OpenXrSession::RequestExit() {
+  DrainFrameWait();
   if (running_) Check(xrRequestExitSession(session_), "Request session exit");
 }
 }  // namespace skate3::vr

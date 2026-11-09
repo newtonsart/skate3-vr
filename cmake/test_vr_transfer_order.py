@@ -21,7 +21,13 @@ code=r'''
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "perf_trace.h"
 using std::string;
+using skate3::vr::TransferTiming;
+using FrameClock=std::chrono::steady_clock;
+double FrameMs(FrameClock::time_point start, FrameClock::time_point end=FrameClock::now()) {
+  return std::chrono::duration<double,std::milli>(end-start).count();
+}
 std::vector<string> calls;
 string failure;
 bool gpu_done=true,waited_image=false,drain_throws=false,can_overlap=true;
@@ -65,7 +71,7 @@ struct State {
   Gpu graphics; Gpu* gpu=&graphics;
   struct Eye { int handle=1; } eyes[3];
   int device=1,fence=1; bool timing=true;
-  double transfer_submit_ms[3]{},transfer_image_ms[3]{},transfer_fence_ms[3]{};
+  TransferTiming transfer_timing[3];
   double gpu_render_ms[2]{},gpu_copy_ms[2]{};
   double ReadGpuDuration(int) { assert(gpu_done); return 1; }
   void SaveCapture(unsigned,unsigned,int) { assert(gpu_done); calls.push_back("capture"); }
@@ -155,6 +161,6 @@ int main() {
 with tempfile.TemporaryDirectory(dir=root/'out/test-temp') as directory:
     cpp=Path(directory)/'order.cpp'; exe=Path(directory)/'order.exe'
     cpp.write_text(code)
-    subprocess.run(['clang++','-std=c++20',str(cpp),'-o',str(exe)],check=True)
+    subprocess.run(['clang++','-std=c++20','-I',str(root/'src/vr'),str(cpp),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)
 print('PASS: right recording overlaps left GPU work; completion precedes release and the next submit; overflow, captures, yields and failures')
