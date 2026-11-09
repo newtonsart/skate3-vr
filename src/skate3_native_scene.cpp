@@ -3653,7 +3653,9 @@ bool PortraitRttWindowActive() {
     // screen pushes [0,56,59] and its panels are VIDEOS served by the
     // native FMV substitution, not portrait RTTs; the fail-open window
     // there bought only its costs, 73 fps + 167 ms sync-compile stalls).
-    if (f0 != 0 && f0 != 56 && f0 != 24 && f0 != 17 && f0 != 59) {
+    // 45 is Game Settings. Its 2D rows do not need the portrait passes,
+    // which repeatedly resolve the same screenshot target while it is open.
+    if (f0 != 0 && f0 != 56 && f0 != 24 && f0 != 17 && f0 != 59 && f0 != 45) {
       unknown_screen = true;
     }
   }
@@ -3684,7 +3686,7 @@ bool PortraitRttWindowActive() {
       }
       REXLOG_INFO(
           "native-scene: FE stack changed: [{}] (portrait window {}; "
-          "steady-safe = 0/56/24/17/59)",
+          "steady-safe = 0/56/24/17/59/45)",
           buf, unknown_screen ? "OPEN - unclassified screen" : "steady");
     }
   }
