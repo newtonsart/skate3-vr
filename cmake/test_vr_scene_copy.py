@@ -5,17 +5,42 @@ s=(root/'src/vr/game_vr.cpp').read_text()
 a=s.index('  std::shared_ptr<native_scene::FrameScene> scene_copy;')
 b=s.index('  int settings_editor=',a)
 method=s[a:b]
+native=(root/'src/skate3_native_scene.cpp').read_text()
+start=native.index('SceneOverlays SnapshotSceneOverlays()')
+overlays=native[start:native.index('void GetCapturedSunDir',start)]
+assert s.count('camera.overlays=&overlays;')==2
 code=r'''
 #include "skate3_native_scene.h"
 #include <memory>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
+#include <mutex>
+namespace skate3::native_scene {
+struct Draw2d { std::vector<int> verts; };
+struct SplineDraw { std::vector<int> verts; };
+std::mutex g_2d_mutex;
+std::shared_ptr<const std::vector<Draw2d>> g_scene_2d;
+std::shared_ptr<const std::vector<SplineDraw>> g_scene_spline;
+'''+overlays+r'''
+}
 namespace native_scene=skate3::native_scene;
 struct Cache {
 '''+method+r'''
 };
 int main() {
+  {
+    using namespace native_scene;
+    g_scene_2d=std::make_shared<const std::vector<Draw2d>>(std::vector<Draw2d>{{{11,12}}});
+    g_scene_spline=std::make_shared<const std::vector<SplineDraw>>(std::vector<SplineDraw>{{{17}}});
+    const auto pair=SnapshotSceneOverlays();
+    assert(pair.hud==g_scene_2d && pair.splines==g_scene_spline);
+    g_scene_2d=std::make_shared<const std::vector<Draw2d>>(std::vector<Draw2d>{{{99}}});
+    g_scene_spline.reset();
+    assert(pair.hud->front().verts.front()==11 && pair.splines->front().verts.front()==17);
+    const auto next=SnapshotSceneOverlays();
+    assert(next.hud->front().verts.front()==99 && !next.splines);
+  }
   native_scene::FrameScene source;
   source.items.resize(2048);
   for (auto& item:source.items) { item.draws.resize(3); item.bones.resize(48,1.f); }

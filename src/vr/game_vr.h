@@ -11,6 +11,7 @@ struct StereoShadows {
 struct EyeCamera {
   std::shared_ptr<const native_scene::FrameScene> scene;
   std::shared_ptr<native_scene::FrameScene> render_scene;
+  const native_scene::SceneOverlays* overlays=nullptr;
   float view_proj[16]{}, proj[16]{}, position[3]{};
   bool override_camera = false;
   bool clear_hud_backdrop = false;

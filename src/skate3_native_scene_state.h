@@ -607,8 +607,7 @@ struct Draw2d {
 };
 inline std::mutex g_2d_mutex;
 inline std::vector<Draw2d> g_frame_2d;  // capture in submission order
-inline std::vector<Draw2d> g_scene_2d;  // published at frame end
-inline uint64_t g_scene_2d_generation = 0;
+inline std::shared_ptr<const std::vector<Draw2d>> g_scene_2d;
 
 // One captured in-world neon spline draw (waypoint arrows / marker beams;
 // decoded from a live capture + the game's own spline.fx source): a
@@ -633,7 +632,7 @@ struct SplineDraw {
   std::vector<uint8_t> verts;
 };
 inline std::vector<SplineDraw> g_frame_spline;  // guarded by g_2d_mutex
-inline std::vector<SplineDraw> g_scene_spline;
+inline std::shared_ptr<const std::vector<SplineDraw>> g_scene_spline;
 inline std::atomic<uint64_t> g_draws_spline{0};
 // Current guest shader objects and render-state shadow bank, for the 2D
 // recon recording (grouping the stream by shader / reading blend state).

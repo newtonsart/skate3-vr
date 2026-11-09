@@ -9,11 +9,20 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "native/screen_fx.h"
 
 namespace skate3::native_scene {
+
+struct Draw2d;
+struct SplineDraw;
+struct SceneOverlays {
+  std::shared_ptr<const std::vector<Draw2d>> hud;
+  std::shared_ptr<const std::vector<SplineDraw>> splines;
+};
+SceneOverlays SnapshotSceneOverlays();
 
 // DrawItem::char_rows layout (floats). [0, kCharUploadFloats) is the b2
 // block the scene PS reads (cbuffer CH); the fetch words after it are

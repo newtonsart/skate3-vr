@@ -11714,15 +11714,15 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   // In-world neon splines (waypoint arrows / marker beams): replayed inside
   // the scene pass, depth-tested against the world like the emulated frame,
   // in submission order (darken backdrop passes precede the additive glow).
+  const SceneOverlays* pair_overlays=nullptr;
+#if SKATE3_HAS_OPENXR
+  if (user_data) pair_overlays=static_cast<const skate3::vr::EyeCamera*>(user_data)->overlays;
+#endif
   uint32_t drawn_spline = 0;
-  if (REXCVAR_GET(skate3_native_render_scene_splines) &&
+  if (const auto splines=pair_overlays ? pair_overlays->splines : SnapshotSceneOverlays().splines;
+      splines && REXCVAR_GET(skate3_native_render_scene_splines) &&
       g_r.pso_spline_default != nullptr && g_r.ui_ring_cpu != nullptr) {
-    std::vector<SplineDraw> scene_spline;
-    {
-      std::lock_guard<std::mutex> lock(g_2d_mutex);
-      scene_spline = g_scene_spline;
-    }
-    for (const SplineDraw& s : scene_spline) {
+    for (const SplineDraw& s : *splines) {
       const uint32_t bytes = uint32_t(s.verts.size());
       if (bytes == 0) {
         continue;
@@ -12764,19 +12764,16 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   uint32_t drawn_2d = 0;
   if (REXCVAR_GET(skate3_native_render_scene_2d) && g_r.pso_2d != nullptr &&
       g_r.ui_ring_cpu != nullptr) {
-    std::vector<Draw2d> scene_2d;
-    {
-      std::lock_guard<std::mutex> lock(g_2d_mutex);
-      scene_2d = g_scene_2d;
-    }
+    auto hud=pair_overlays ? pair_overlays->hud : SnapshotSceneOverlays().hud;
 #if SKATE3_HAS_OPENXR
     // Keep the native Options screen from covering the live editor preview.
     if (user_data && static_cast<skate3::vr::EyeCamera*>(user_data)->override_camera &&
         rex::cvar::Query<int32_t>("skate3_vr_edit_mode") != 0) {
-      scene_2d.clear();
+      hud.reset();
     }
 #endif
-    if (!scene_2d.empty()) {
+    if (hud) {
+      const auto& scene_2d=*hud;
 #if SKATE3_HAS_OPENXR
       int loading_backdrop=-1;
       if(user_data) {

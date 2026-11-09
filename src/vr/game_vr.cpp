@@ -149,6 +149,8 @@ struct State {
   VkQueryPool timing=VK_NULL_HANDLE;
   uint32_t timestamp_bits=0;
   float timestamp_period=0;
+  PFN_vkGetCalibratedTimestampsEXT calibrate=nullptr;
+  double host_ticks_per_ms=0;
   double gpu_render_ms[2]{-1,-1},gpu_copy_ms[2]{-1,-1};
   TransferTiming transfer_timing[3];
   uint32_t perf_samples=0;
@@ -219,6 +221,29 @@ struct State {
         timing=VK_NULL_HANDLE;
         REXLOG_WARN("VR: GPU timestamp timing unavailable");
       }
+#if defined(_WIN32)
+      if (timing) {
+        const auto calibrate_device=reinterpret_cast<PFN_vkGetCalibratedTimestampsEXT>(
+            vkGetDeviceProcAddr(device,"vkGetCalibratedTimestampsEXT"));
+        const auto domains=reinterpret_cast<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT>(
+            vkGetInstanceProcAddr(gpu->vulkan_instance()->instance(),"vkGetPhysicalDeviceCalibrateableTimeDomainsEXT"));
+        uint32_t count=0;
+        if (calibrate_device && domains && domains(gpu->physical_device(),&count,nullptr)==VK_SUCCESS && count) {
+          std::vector<VkTimeDomainEXT> supported(count);
+          LARGE_INTEGER frequency{};
+          if (domains(gpu->physical_device(),&count,supported.data())==VK_SUCCESS) {
+            supported.resize(count);
+            if (std::ranges::find(supported,VK_TIME_DOMAIN_DEVICE_EXT)!=supported.end() &&
+                std::ranges::find(supported,VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_EXT)!=supported.end() &&
+                QueryPerformanceFrequency(&frequency) && frequency.QuadPart>0) {
+              calibrate=calibrate_device;
+              host_ticks_per_ms=double(frequency.QuadPart)/1000;
+            }
+          }
+        }
+        if (REXCVAR_GET(skate3_vr)) REXLOG_INFO("VR: calibrated GPU timeline {}",calibrate?"available":"unavailable");
+      }
+#endif
     }
   }
   void Bind(rex::ui::vulkan::VulkanDevice* graphics) {
@@ -345,10 +370,43 @@ struct State {
     if(!file) throw std::runtime_error("Cannot save stereo capture"); eye_hashes[eye]=hash;
     REXLOG_INFO("VR: saved {} {}x{} pixel-hash={:016X}",name,width,height,hash);
   }
-  double ReadGpuDuration(uint32_t first) {
-    uint64_t ticks[2];
-    const auto result=vkGetQueryPoolResults(device,timing,first,2,sizeof(ticks),ticks,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT);
-    return result==VK_SUCCESS ? GpuDurationMs(ticks[0],ticks[1],timestamp_bits,timestamp_period) : -1.0;
+  bool ReadGpuTimestamps(uint32_t first,uint64_t (&ticks)[2]) {
+    return vkGetQueryPoolResults(device,timing,first,2,sizeof(ticks),ticks,
+                                sizeof(uint64_t),VK_QUERY_RESULT_64_BIT)==VK_SUCCESS;
+  }
+  uint64_t ReadFenceCounter() const {
+#if defined(_WIN32)
+    if (calibrate) {
+      LARGE_INTEGER ticks{};
+      if (QueryPerformanceCounter(&ticks)) return uint64_t(ticks.QuadPart);
+    }
+#endif
+    return 0;
+  }
+  void ReadEyeTiming(int e, uint64_t wait_start, uint64_t wait_end) {
+    uint64_t draw[2]{},copy[2]{};
+    const bool have_draw=ReadGpuTimestamps(e*2,draw);
+    const bool have_copy=ReadGpuTimestamps(4+e*2,copy);
+    gpu_render_ms[e]=have_draw ? GpuDurationMs(draw[0],draw[1],timestamp_bits,timestamp_period) : -1;
+    auto& stages=transfer_timing[e];
+    stages.gpu=gpu_copy_ms[e]=have_copy ? GpuDurationMs(copy[0],copy[1],timestamp_bits,timestamp_period) : -1;
+    if (!calibrate || !wait_start || !wait_end || stages.fence<2 || !have_draw || !have_copy) return;
+    const VkCalibratedTimestampInfoEXT domains[]={
+        {VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_EXT,nullptr,VK_TIME_DOMAIN_DEVICE_EXT},
+        {VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_EXT,nullptr,VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_EXT}};
+    uint64_t stamps[2]{}, deviation=0;
+    if (calibrate(device,2,domains,stamps,&deviation)!=VK_SUCCESS || deviation>250'000) return;
+    const auto host_offset=[&](uint64_t host) {
+      return host>=stamps[1] ? double(host-stamps[1])/host_ticks_per_ms : -double(stamps[1]-host)/host_ticks_per_ms;
+    };
+    const auto gpu_offset=[&](uint64_t tick) {
+      return GpuTimestampOffsetMs(stamps[0],tick,timestamp_bits,timestamp_period);
+    };
+    stages.draw_after_wait=gpu_offset(draw[0])-host_offset(wait_start);
+    stages.draw_end_after_wait=gpu_offset(draw[1])-host_offset(wait_start);
+    stages.copy_after_wait=gpu_offset(copy[0])-host_offset(wait_start);
+    stages.fence_after_copy=host_offset(wait_end)-gpu_offset(copy[1]);
+    stages.clock_error=double(deviation)/1e6;
   }
   bool BenchmarkDesktop(const NativeGuestOutputRenderContext& input,
                         std::shared_ptr<const native_scene::FrameScene> scene,
@@ -392,6 +450,7 @@ struct State {
     double cpu_ms=0,copy_ms=0,gpu_ms=0,begin_ms=0,flush_ms=0,query_ms=0;
     const auto copy_start=std::chrono::steady_clock::now();
     auto render_scene=share ? CopyScene(*scene) : nullptr;
+    const auto overlays=native_scene::SnapshotSceneOverlays();
     if (share) cpu_ms=copy_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-copy_start).count();
     for (int eye=0;eye<2;++eye) {
       if (eye) {
@@ -402,6 +461,7 @@ struct State {
       }
       EyeCamera camera; camera.scene=scene; camera.eye_index=eye;
       camera.render_scene=render_scene;
+      camera.overlays=&overlays;
       camera.override_camera=true; camera.shadows=share?&shadows:nullptr;
       std::copy(scene->view_proj,scene->view_proj+16,camera.view_proj);
       std::copy(scene->proj,scene->proj+16,camera.proj);
@@ -428,7 +488,9 @@ struct State {
       flush_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-flush_start).count();
       if (!rendered || !camera.override_camera) return rendered;
       const auto query_start=std::chrono::steady_clock::now();
-      const double duration=ReadGpuDuration(eye*2);
+      uint64_t ticks[2]{};
+      const double duration=ReadGpuTimestamps(eye*2,ticks) ?
+          GpuDurationMs(ticks[0],ticks[1],timestamp_bits,timestamp_period) : -1;
       query_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-query_start).count();
       if (duration<0) return rendered;
       gpu_ms+=duration;
@@ -444,15 +506,13 @@ struct State {
   }
   void CompleteTransfer(int e, uint32_t capture_width=0, uint32_t capture_height=0) {
     const auto fence_start=std::chrono::steady_clock::now();
+    const uint64_t wait_start=e<2 ? ReadFenceCounter() : 0;
     VkCheck(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"Complete XR transfer");
+    const uint64_t wait_end=e<2 ? ReadFenceCounter() : 0;
     const auto query_start=FrameClock::now();
     auto& stages=transfer_timing[e];
     stages.fence=FrameMs(fence_start,query_start);
-    if (timing && e<2) {
-      gpu_render_ms[e]=ReadGpuDuration(e*2);
-      gpu_copy_ms[e]=ReadGpuDuration(4+e*2);
-      stages.gpu=gpu_copy_ms[e];
-    }
+    if (timing && e<2) ReadEyeTiming(e,wait_start,wait_end);
     stages.queries=FrameMs(query_start);
     if(capture_width) {
       try { SaveCapture(capture_width,capture_height,e); }
@@ -621,8 +681,29 @@ VkPhysicalDevice SelectGpu(void* user,VkInstance instance) {
 VkResult CreateDevice(void* user,PFN_vkGetInstanceProcAddr proc,VkPhysicalDevice gpu,const VkDeviceCreateInfo* info,VkDevice* output) {
   auto& s=*static_cast<State*>(user);
   try {
+    auto device_info=*info;
+    std::vector<const char*> extensions;
+#if defined(_WIN32)
+    if (REXCVAR_GET(skate3_vr_gpu_timing)) {
+      uint32_t count=0;
+      if (vkEnumerateDeviceExtensionProperties(gpu,nullptr,&count,nullptr)==VK_SUCCESS && count) {
+        std::vector<VkExtensionProperties> supported(count);
+        if (vkEnumerateDeviceExtensionProperties(gpu,nullptr,&count,supported.data())==VK_SUCCESS &&
+            std::any_of(supported.begin(),supported.begin()+count,[](const VkExtensionProperties& extension) {
+              return std::strcmp(extension.extensionName,VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)==0;
+            })) {
+          for (uint32_t i=0;i<info->enabledExtensionCount;++i) extensions.push_back(info->ppEnabledExtensionNames[i]);
+          if (std::none_of(extensions.begin(),extensions.end(),[](const char* name) {
+            return std::strcmp(name,VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)==0;
+          })) extensions.push_back(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+          device_info.enabledExtensionCount=uint32_t(extensions.size());
+          device_info.ppEnabledExtensionNames=extensions.data();
+        }
+      }
+    }
+#endif
     XrVulkanDeviceCreateInfoKHR create{XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR};
-    create.systemId=s.xr.system(); create.pfnGetInstanceProcAddr=proc; create.vulkanPhysicalDevice=gpu; create.vulkanCreateInfo=info;
+    create.systemId=s.xr.system(); create.pfnGetInstanceProcAddr=proc; create.vulkanPhysicalDevice=gpu; create.vulkanCreateInfo=&device_info;
     VkResult result; XrCheck(Function<PFN_xrCreateVulkanDeviceKHR>(s.xr.instance(),"xrCreateVulkanDeviceKHR")(s.xr.instance(),&create,output,&result),"Create shared Vulkan device"); return result;
   } catch(const std::exception& error) { REXLOG_ERROR("VR: {}",error.what()); return VK_ERROR_INITIALIZATION_FAILED; }
 }
@@ -855,6 +936,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     const double shared_scene_copy_ms=render_scene ?
         std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-scene_copy_start).count() : 0;
     scene_copy_ms[0]=shared_scene_copy_ms;
+    const auto overlays=native_scene::SnapshotSceneOverlays();
     // Photo capture/card composition is a mono game operation, not two eye-side effects.
     for(int eye=0;eye<(photo_flat ? 1 : 2);++eye) {
       const auto eye_setup_start=FrameClock::now();
@@ -862,6 +944,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       EyeCamera camera; camera.scene=scene; camera.eye_index=eye;
       camera.shadows=share_work ? &shadows : nullptr;
       camera.render_scene=render_scene;
+      camera.overlays=&overlays;
       camera.clear_hud_backdrop=!window && !photo && !object_editor && REXCVAR_GET(skate3_vr_clear_hud_backdrop);
       camera.capture_ui=capture && eye==0;
       camera.share_preparation=!photo && !object_editor && !pause_menu;
@@ -1059,6 +1142,11 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
                 t.worst_transfer_scene,t.worst_transfer_items,t.transfer_max,eye,stages.total,
                 stages.native_submit,stages.queue_lock,stages.acquire,stages.image_wait,stages.record,stages.queue_submit,
                 stages.fence,stages.queries,stages.release,stages.gpu);
+            if (stages.clock_error>=0) {
+              REXLOG_INFO("VR trace GPU timeline: scene={} eye={} draw-start/end-from-fence-entry={:.2f}/{:.2f}ms copy-start-from-fence-entry={:.2f}ms fence-return-from-copy-end={:.2f}ms clock-error={:.3f}ms",
+                  t.worst_transfer_scene,eye,stages.draw_after_wait,stages.draw_end_after_wait,stages.copy_after_wait,
+                  stages.fence_after_copy,stages.clock_error);
+            }
           };
           log_transfer("L",t.worst_transfer.eyes[0]);
           log_transfer("R",t.worst_transfer.eyes[1]);

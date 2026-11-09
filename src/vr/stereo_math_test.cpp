@@ -211,6 +211,9 @@ int main() {
   Check(skate3::vr::GpuDurationMs(0,1,0,1)<0);
   Check(skate3::vr::GpuDurationMs(0,1,65,1)<0);
   Check(skate3::vr::GpuDurationMs(0,1,64,-1)<0);
+  Check(std::abs(skate3::vr::GpuTimestampOffsetMs(250,4,8,100000)-1.0)<1e-9);
+  Check(std::abs(skate3::vr::GpuTimestampOffsetMs(4,250,8,100000)+1.0)<1e-9);
+  Check(std::abs(skate3::vr::GpuTimestampOffsetMs(1100,100,64,1000)+1.0)<1e-9);
   const float p[16]={-1,0,0,0,0,1,0,0,0,0,1.001f,1,0,0,-0.1001f,0};
   float camera[3]={0,0,0},vp[16],projection[16],position[3];
   XrPosef reference{{0,0,0,1},{0,0,0}};

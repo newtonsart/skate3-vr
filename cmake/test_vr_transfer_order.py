@@ -73,7 +73,8 @@ struct State {
   int device=1,fence=1; bool timing=true;
   TransferTiming transfer_timing[3];
   double gpu_render_ms[2]{},gpu_copy_ms[2]{};
-  double ReadGpuDuration(int) { assert(gpu_done); return 1; }
+  uint64_t ReadFenceCounter() const { return 0; }
+  void ReadEyeTiming(int,uint64_t,uint64_t) { assert(gpu_done); }
   void SaveCapture(unsigned,unsigned,int) { assert(gpu_done); calls.push_back("capture"); }
 '''+complete+r'''
   void Transfer(const Context& context,int e,bool capture=false,const void* settings=nullptr,

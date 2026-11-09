@@ -2941,8 +2941,8 @@ bool ToggleSceneEnabled() {
     }
     {
       std::lock_guard<std::mutex> lock(g_2d_mutex);
-      g_scene_2d.clear();
-      g_scene_spline.clear();
+      g_scene_2d.reset();
+      g_scene_spline.reset();
     }
     // Warm up before taking over: after a long emulated stretch the decode
     // caches can be cold/stale, and the takeover frame would pay the whole
@@ -8713,9 +8713,9 @@ void Publish2dDraws(uint8_t* base) {
     }
     published.push_back(std::move(d));
   }
+  auto snapshot = published.empty() ? nullptr : std::make_shared<const std::vector<Draw2d>>(std::move(published));
   std::lock_guard<std::mutex> lock(g_2d_mutex);
-  g_scene_2d = std::move(published);
-  ++g_scene_2d_generation;
+  g_scene_2d.swap(snapshot);
 }
 
 // Publish the frame's in-world spline draws: evaluate the guest B-spline
@@ -8815,8 +8815,14 @@ void PublishSplineDraws(uint8_t* base) {
     s.verts.swap(out);
     published.push_back(std::move(s));
   }
+  auto snapshot = published.empty() ? nullptr : std::make_shared<const std::vector<SplineDraw>>(std::move(published));
   std::lock_guard<std::mutex> lock(g_2d_mutex);
-  g_scene_spline = std::move(published);
+  g_scene_spline.swap(snapshot);
+}
+
+SceneOverlays SnapshotSceneOverlays() {
+  std::lock_guard lock(g_2d_mutex);
+  return {g_scene_2d,g_scene_spline};
 }
 
 void GetCapturedSunDir(float out[3]) {

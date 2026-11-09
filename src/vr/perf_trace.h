@@ -15,6 +15,7 @@ struct FrameWorkTiming {
 struct TransferTiming {
   double native_submit=0, acquire=0, image_wait=0, record=0, queue_submit=0;
   double fence=0, queries=0, release=0, queue_lock=0, gpu=-1, total=0;
+  double draw_after_wait=0, draw_end_after_wait=0, copy_after_wait=0, fence_after_copy=0, clock_error=-1;
 };
 struct FrameTransfers {
   TransferTiming eyes[2], overlay;
