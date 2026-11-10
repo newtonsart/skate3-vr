@@ -18,7 +18,8 @@ FILES = ["include/rex/ui/vulkan/instance.h", "src/ui/vulkan/vulkan_instance.cpp"
          "src/graphics/vulkan/command_processor.cpp",
          "include/rex/ui/overlay/install_wizard_overlay.h",
          "src/ui/overlay/install_wizard_overlay.cpp", "thirdparty/CMakeLists.txt",
-         "src/ui/rex_app.cpp", "src/core/cvar.cpp", "src/audio/xma_context.cpp"]
+         "src/ui/rex_app.cpp", "src/core/cvar.cpp", "src/audio/xma_context.cpp",
+         "include/rex/ui/vulkan/mem_alloc.h", "src/ui/vulkan/vulkan_mem_alloc.cpp"]
 
 
 class InteropTests(unittest.TestCase):
@@ -137,7 +138,12 @@ int main() {
             self.assertIn('row.label = "VR View"', (sdk / FILES[8]).read_text())
             self.assertIn('"Auto (OpenXR)"', (sdk / FILES[8]).read_text())
             self.assertIn('In VR, Auto uses OpenXR pacing.', (sdk / FILES[8]).read_text())
-            self.assertIn('"skate3_vr_window_feather"};', (sdk / FILES[8]).read_text())
+            self.assertIn('"skate3_vr_window_feather",', (sdk / FILES[8]).read_text())
+            overlay = (sdk / "src/ui/overlay/simple_settings_overlay.cpp").read_text()
+            vr = overlay[overlay.index("case 5: {  // VR"):overlay.index("case 0: {  // Video")]
+            self.assertIn('row.label = "VR View"', vr)
+            self.assertIn('row.label = "VRAM Block Size"', vr)
+            self.assertIn('"vulkan_native_vma_block_mb"};', overlay)
             self.assertIn('edges.label = "VR Window Edges"', (sdk / FILES[8]).read_text())
             self.assertIn('stereo.label = "VR Window Depth"', (sdk / FILES[8]).read_text())
             self.assertIn('"Face Viewer While Placing"', (sdk / FILES[8]).read_text())

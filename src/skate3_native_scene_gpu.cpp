@@ -71,6 +71,11 @@ REXCVAR_DEFINE_BOOL(skate3_vr_static_frustum_cull, true, "VR",
 #include "vr/game_vr.h"
 #include "vr/hud_backdrop.h"
 #include "vr/presentation.h"
+#include <rex/graphics/vulkan/native_rhi_vulkan.h>
+
+REXCVAR_DEFINE_BOOL(skate3_vr_reserve_vram, false, "VR",
+                    "Experimentally reserve one block of texture memory during flat loading")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 #endif
 
 // Cvars defined in skate3_native_scene.cpp (and SDK cvars re-declared there).
@@ -13226,12 +13231,14 @@ void Install() {
         { std::lock_guard lock(g_scene_mutex); scene = g_scene; }
         if (skate3::vr::GameVrEnabled()) {
           static bool seen_gameplay=false;
+          static bool reserve_attempted=false;
           const bool in_menus=rex::kernel::guest_presence::GameplayContextValue()==0;
           if (!in_menus) seen_gameplay=true;
           rex::graphics::RequestNativeGuestOutputPostProcess(true);
           const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
               PerfClock::now().time_since_epoch()).count();
-          if (!skate3::vr::CanPresentWorld(scene && !scene->items.empty(),
+          const bool has_items=scene && !scene->items.empty();
+          if (!skate3::vr::CanPresentWorld(has_items,
               now-g_last_publish_ns.load(),in_menus,
               rex::cvar::Query<bool>("skate3_vr_pause_in_world"),seen_gameplay)) {
             // Flat XR loading uses the guest image, so RenderScene cannot
@@ -13244,9 +13251,18 @@ void Install() {
                 EnsurePrewarmWorkers();
                 PrewarmCommit(context, g_frames_rendered.load(std::memory_order_relaxed),
                               /*loading=*/false, /*flat_vr=*/true);
+                if (!has_items && !reserve_attempted && REXCVAR_GET(skate3_vr_reserve_vram) &&
+                    g_prewarm_done.load(std::memory_order_relaxed) > 0) {
+                  reserve_attempted=true;
+                  rex::graphics::vulkan::NativeRhiHoldTextureReserve(context.device, true);
+                }
               }
             }
             return false;
+          }
+          if (reserve_attempted && context.backend == NativeGuestOutputBackend::kVulkan) {
+            rex::graphics::vulkan::NativeRhiHoldTextureReserve(context.device, false);
+            reserve_attempted=false;
           }
         }
         return skate3::vr::RenderStereo(context, std::move(scene), &RenderScene);

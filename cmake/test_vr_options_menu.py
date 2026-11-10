@@ -59,7 +59,7 @@ harness += section("// A row we add to the root", "std::atomic<bool> g_installed
 harness += "\nstd::vector<Page> g_pages;\nstd::vector<RootRow> g_root_rows;\n"
 harness += section("int NearestIndex(", "bool HasPendingRestart()")
 harness += section("Row* AddRow(", "// The overlay's restart-applied")
-harness += section("void AddVrRows(", "Page BuildViewPage()")
+harness += section("Page BuildVrPage()", "Page BuildControlsPage(")
 harness += section("void AddMenuPage(", "// Categories each keep")
 harness += r'''
 struct PPCContext {};
@@ -72,18 +72,17 @@ void RefreshScreen(PPCContext&, uint8_t*, uint32_t, int) {}
 '''
 harness += section("int SteppedIndex(", "void CopyGuestString(")
 harness += '\nint main() {\n' + declarations + r'''
-  Page desktop{"View"};
-  AddVrRows(desktop);
+  const Page desktop = BuildVrPage();
   assert(desktop.rows.empty());
+  flags["vulkan_native_vma_block_mb"] = "32";
   flags["skate3_vr_settings_test"] = "true";
-  Page diagnostic{"View"};
-  AddVrRows(diagnostic);
-  assert(diagnostic.rows.size() == 20);
+  Page diagnostic = BuildVrPage();
+  assert(diagnostic.title == "VR" && diagnostic.rows.size() == 21);
   flags["skate3_vr_settings_test"] = "false";
   flags["skate3_vr"] = "true";
-  Page page{"View"};
-  AddVrRows(page);
-  assert(page.rows.size() == 20);
+  Page page = BuildVrPage();
+  assert(page.title == "VR" && page.rows.size() == 21);
+  assert(BuildViewPage().rows.empty());  // No VR rows in the desktop category.
   auto row = [&](const char* title) -> Row& {
     auto it = std::find_if(page.rows.begin(), page.rows.end(),
                            [&](const Row& r) { return r.title == title; });
@@ -128,6 +127,12 @@ harness += '\nint main() {\n' + declarations + r'''
   assert(saved == 1 && rex::cvar::Query<double>("skate3_vr_render_scale") == 0);
   assert(StepRow(context, nullptr, 0, row("VR Render Resolution"), -1));
   assert(saved == 2 && rex::cvar::Query<double>("skate3_vr_render_scale") == 1.25);
+  auto& blocks = row("VRAM Block Size");
+  assert(blocks.restart && blocks.get() == 1);
+  assert(StepRow(context, nullptr, 0, blocks, 1));
+  assert(blocks.pending == 2 && blocks.get() == 1 && saved == 2);
+  blocks.set(*blocks.pending);
+  assert(rex::cvar::Query<int>("vulkan_native_vma_block_mb") == 64);
   for (int count : {0, 1, 8, 9, 25, 36}) {
     g_pages.clear();
     g_root_rows.clear();

@@ -6,11 +6,13 @@ import sys
 def apply(sdk):
     if (sdk / ".git").exists():
         raise ValueError("Use a disposable SDK copy (REXSDK_DIR), not the source submodule")
-    def edit(name, old, new):
+    def edit(name, old, new, previous=None):
         path = sdk / name
         text = path.read_text(encoding="utf-8")
         if new in text:
             return
+        if previous is not None and previous in text:
+            old = previous
         if text.count(old) != 1:
             raise ValueError(f"Pinned SDK patch anchor mismatch: {name}: {old[:65]}")
         path.write_text(text.replace(old, new), encoding="utf-8")
@@ -149,22 +151,22 @@ def apply(sdk):
     just_shown_ = true;
     return;
   }""")
+    if "  int vr_resolution_index_ = 0;" in (sdk / "include/rex/ui/overlay/simple_settings_overlay.h").read_text(encoding="utf-8"):
+        edit("include/rex/ui/overlay/simple_settings_overlay.h",
+             "  int vr_resolution_index_ = 0;",
+             "  int vr_resolution_index_ = 0, vr_memory_block_index_ = 1;")
     edit("include/rex/ui/overlay/simple_settings_overlay.h",
          "  bool renderer_native_ = true;",
          "  bool renderer_native_ = true;\n"
          "  int vr_mode_ = 0;\n"
-         "  int vr_resolution_index_ = 0;\n"
+         "  int vr_resolution_index_ = 0, vr_memory_block_index_ = 1;\n"
          "  float vr_window_width_ = 2.4f, vr_window_distance_ = 2.0f, vr_window_height_ = 0.0f;\n"
          "  float vr_camera_distance_ = 0, vr_camera_height_ = 0, vr_world_scale_ = 1;\n"
          "  float vr_hud_width_ = 1.6f, vr_hud_distance_ = 2.0f;\n"
          "  bool vr_pause_in_world_ = true;\n"
          "  int vr_window_edges_index_ = 0, vr_window_depth_index_ = 2;\n"
          "  bool vr_window_face_viewer_ = true, vr_editor_comfort_ = true, vr_clear_hud_backdrop_ = true;")
-    edit("src/ui/overlay/simple_settings_overlay.cpp",
-         "constexpr std::array<std::string_view, 24> kOptionalSimpleSettingsCvars = {",
-         "constexpr std::array<std::string_view, 40> kOptionalSimpleSettingsCvars = {")
-    edit("src/ui/overlay/simple_settings_overlay.cpp",
-         '    "user_language"};',
+    previous_vr_config = (
          '    "user_language",\n'
          '    "skate3_vr_mode",\n'
          '    "skate3_vr_window_width",\n'
@@ -183,8 +185,10 @@ def apply(sdk):
          '    "skate3_vr_clear_hud_backdrop",\n'
          '    "skate3_vr_window_feather"};')
     edit("src/ui/overlay/simple_settings_overlay.cpp",
-         '    case 0: {  // Video\n      header("Display");',
-         '''    case 0: {  // Video
+         '    "user_language"};',
+         previous_vr_config[:-2] + ',\n    "vulkan_native_vma_block_mb"};',
+         previous=previous_vr_config)
+    old_vr_rows = '''    case 0: {  // Video
       if (HasCvar("skate3_vr_mode") && HasCvar("skate3_vr") &&
           (rex::cvar::Query<bool>("skate3_vr") ||
            rex::cvar::Query<bool>("skate3_vr_settings_test"))) {
@@ -362,7 +366,142 @@ def apply(sdk):
           rows.push_back(std::move(capture));
         }
       }
-      header("Display");''')
+      header("Display");'''
+    vr_rows = old_vr_rows[old_vr_rows.index("        vr_mode_ ="):old_vr_rows.rindex("      }")]
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         '    case 0: {  // Video\n      header("Display");',
+         '    case 5: {  // VR\n' + vr_rows + """      if (HasCvar("vulkan_native_vma_block_mb")) {
+        const auto block = rex::cvar::Query<int32_t>("vulkan_native_vma_block_mb");
+        vr_memory_block_index_ = block == 16 ? 0 : block == 64 ? 2 : 1;
+        RowSpec row;
+        row.kind = RowSpec::kEnum;
+        row.label = "VRAM Block Size";
+        row.desc = "Preferred Vulkan memory block size. Takes effect after restarting the game.";
+        row.options = {"16 MiB", "32 MiB (Default)", "64 MiB"};
+        row.index = &vr_memory_block_index_;
+        row.on_enum_change = [this](int value) {
+          static constexpr int sizes[] = {16, 32, 64};
+          rex::cvar::SetFlagByName("vulkan_native_vma_block_mb", std::to_string(sizes[value]));
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        row.reset = [this] {
+          vr_memory_block_index_ = 1;
+          rex::cvar::SetFlagByName("vulkan_native_vma_block_mb", "32");
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        rows.push_back(std::move(row));
+      }
+      break;
+    }
+    case 0: {  // Video
+      header("Display");""", previous=old_vr_rows)
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         "constexpr std::array<CategoryInfo, 5> kCategories = {{",
+         "constexpr std::array<CategoryInfo, 6> kCategories = {{")
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         '    {"System", "Game language, pending changes and closing the settings."},',
+         '    {"System", "Game language, pending changes and closing the settings."},\n'
+         '    {"VR", "Headset views, controls and Vulkan memory settings."},')
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         "  const int category_count = static_cast<int>(kCategories.size());",
+         """  const bool has_vr = HasCvar("skate3_vr_mode") &&
+      (rex::cvar::Query<bool>("skate3_vr") || rex::cvar::Query<bool>("skate3_vr_settings_test"));
+  const int category_count = static_cast<int>(kCategories.size()) - (has_vr ? 0 : 1);
+  category_ = std::min(category_, category_count - 1);
+  rail_sel_ = std::min(rail_sel_, category_count);""")
+    edit("src/ui/overlay/simple_settings_overlay.cpp",
+         "constexpr std::array<std::string_view, 24> kOptionalSimpleSettingsCvars = {",
+         "constexpr std::array<std::string_view, 41> kOptionalSimpleSettingsCvars = {",
+         previous="constexpr std::array<std::string_view, 40> kOptionalSimpleSettingsCvars = {")
+
+    edit("include/rex/ui/vulkan/mem_alloc.h",
+         "VmaAllocator CreateVmaAllocator(const VulkanDevice* vulkan_device, bool externally_synchronized);",
+         """VmaAllocator CreateVmaAllocator(const VulkanDevice* vulkan_device, bool externally_synchronized,
+                                VkDeviceSize preferred_block_size = 64ull << 20);""")
+    edit("src/ui/vulkan/vulkan_mem_alloc.cpp",
+         "                                const bool externally_synchronized) {",
+         """                                const bool externally_synchronized,
+                                const VkDeviceSize preferred_block_size) {""")
+    edit("src/ui/vulkan/vulkan_mem_alloc.cpp",
+         "allocator_create_info.preferredLargeHeapBlockSize = 64ull << 20;",
+         "allocator_create_info.preferredLargeHeapBlockSize = preferred_block_size;")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         "#include <rex/graphics/vulkan/command_processor.h>",
+         "#include <rex/cvar.h>\n#include <rex/graphics/vulkan/command_processor.h>")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         "namespace rex::graphics::vulkan {",
+         """REXCVAR_DEFINE_INT32(vulkan_native_vma_block_mb, 32, "VR",
+                    "Preferred allocation block size for the native renderer in VR, in MiB")
+    .allowed({"16", "32", "64"}).lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+namespace rex::graphics::vulkan {""",
+         previous="""REXCVAR_DEFINE_INT32(vulkan_native_vma_block_mb, 64, "GPU/Vulkan",
+                    "Preferred allocation block size for the native renderer in MiB")
+    .range(16, 64);
+
+namespace rex::graphics::vulkan {""")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         "    allocator_ = ui::vulkan::CreateVmaAllocator(vulkan_device_, /*externally_synchronized=*/false);",
+         """    const auto block_mb = rex::cvar::Query<bool>("skate3_vr")
+                              ? REXCVAR_GET(vulkan_native_vma_block_mb) : 64;
+    texture_reserve_bytes_ = VkDeviceSize(block_mb) << 20;
+    allocator_ = ui::vulkan::CreateVmaAllocator(
+        vulkan_device_, /*externally_synchronized=*/false, texture_reserve_bytes_);
+    REXLOG_INFO("nrhi-vulkan: preferred native memory block={} MiB", block_mb);""",
+         previous="""    const auto block_mb = rex::cvar::Query<bool>("skate3_vr")
+                              ? REXCVAR_GET(vulkan_native_vma_block_mb) : 64;
+    allocator_ = ui::vulkan::CreateVmaAllocator(
+        vulkan_device_, /*externally_synchronized=*/false, VkDeviceSize(block_mb) << 20);
+    REXLOG_INFO("nrhi-vulkan: preferred native memory block={} MiB", block_mb);""")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         "  ~NrDeviceVulkan() override {",
+         """  void HoldTextureReserve(bool hold) {
+    if (!allocator_) return;
+    if (!hold) {
+      if (texture_reserve_[0]) {
+        vmaFreeMemoryPages(allocator_, std::size(texture_reserve_), texture_reserve_);
+        std::fill(std::begin(texture_reserve_), std::end(texture_reserve_), nullptr);
+        REXLOG_INFO("nrhi-vulkan: released loading reserve for streamed textures");
+      }
+      return;
+    }
+    if (texture_reserve_[0]) return;
+
+    VkImageCreateInfo image{};
+    image.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image.imageType = VK_IMAGE_TYPE_2D;
+    image.format = VK_FORMAT_R8G8B8A8_UNORM;
+    image.extent = {256, 256, 1};
+    image.mipLevels = image.arrayLayers = 1;
+    image.samples = VK_SAMPLE_COUNT_1_BIT;
+    image.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    VmaAllocationCreateInfo allocation{};
+    allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    uint32_t type;
+    if (vmaFindMemoryTypeIndexForImageInfo(allocator_, &image, &allocation, &type) != VK_SUCCESS) return;
+    VkMemoryPropertyFlags properties;
+    vmaGetMemoryTypeProperties(allocator_, type, &properties);
+    if (!(properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) return;
+
+    // Two half-block allocations stay in the ordinary texture allocator's blocks.
+    const VkMemoryRequirements requirements{texture_reserve_bytes_ / 2, 1, uint32_t{1} << type};
+    allocation.usage = VMA_MEMORY_USAGE_UNKNOWN;
+    allocation.flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+    if (vmaAllocateMemoryPages(allocator_, &requirements, &allocation, std::size(texture_reserve_),
+                               texture_reserve_, nullptr) == VK_SUCCESS) {
+      REXLOG_INFO("nrhi-vulkan: holding {} MiB of texture memory during loading", texture_reserve_bytes_ >> 20);
+    } else {
+      REXLOG_INFO("nrhi-vulkan: texture memory reserve unavailable");
+    }
+  }
+
+  ~NrDeviceVulkan() override {
+    HoldTextureReserve(false);""")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         "  VmaAllocator allocator_ = VK_NULL_HANDLE;",
+         "  VmaAllocator allocator_ = VK_NULL_HANDLE;\n  VkDeviceSize texture_reserve_bytes_ = 0;\n"
+         "  VmaAllocation texture_reserve_[2]{};")
 
     edit("include/rex/ui/imgui_drawer.h", "  void Draw(UIDrawContext& ui_draw_context) override;", """  void Draw(UIDrawContext& ui_draw_context) override;
   void SetDrawMirror(std::function<UIDrawContext*(UIDrawContext&)> begin,
@@ -586,6 +725,22 @@ uint32_t NativeRhiOriginalOutputHeight() {
          "  presenter->RefreshGuestOutput(\n      guest_output_width, guest_output_height, display_width, display_height,",
          "  NativeRhiApplyOutputSizeOverride(guest_output_width, guest_output_height);\n"
          "  presenter->RefreshGuestOutput(\n      guest_output_width, guest_output_height, display_width, display_height,")
+
+    edit("include/rex/graphics/vulkan/native_rhi_vulkan.h",
+         "void NativeRhiTimestamp(nrhi::Device* device, VkQueryPool pool, uint32_t index, bool begin);",
+         "void NativeRhiTimestamp(nrhi::Device* device, VkQueryPool pool, uint32_t index, bool begin);\n"
+         "void NativeRhiHoldTextureReserve(nrhi::Device* device, bool hold);")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         """void NativeRhiEndFrame(nrhi::Device* device) {
+  static_cast<NrDeviceVulkan*>(device)->EndFrame();
+}""",
+         """void NativeRhiEndFrame(nrhi::Device* device) {
+  static_cast<NrDeviceVulkan*>(device)->EndFrame();
+}
+
+void NativeRhiHoldTextureReserve(nrhi::Device* device, bool hold) {
+  static_cast<NrDeviceVulkan*>(device)->HoldTextureReserve(hold);
+}""")
 
 
 if __name__ == "__main__":

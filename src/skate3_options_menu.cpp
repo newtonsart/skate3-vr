@@ -399,10 +399,11 @@ Page BuildGraphicsPage(const RestartSettings& settings) {
   return page;
 }
 
-void AddVrRows(Page& page) {
+Page BuildVrPage() {
+  Page page{"VR"};
   if (!HasCvar("skate3_vr") ||
       (!rex::cvar::Query<bool>("skate3_vr") && !rex::cvar::Query<bool>("skate3_vr_settings_test"))) {
-    return;
+    return page;
   }
   const auto immersive = [] { return rex::cvar::Query<int32_t>("skate3_vr_mode") == 0; };
   const auto window = [] { return rex::cvar::Query<int32_t>("skate3_vr_mode") != 0; };
@@ -427,6 +428,11 @@ void AddVrRows(Page& page) {
   AddNumberChoice(page, "VR Render Resolution", "Higher resolution increases GPU workload. Applies immediately.",
                   {"Desktop (compatibility)", "HMD 75%", "HMD 100%", "HMD 125%"},
                   {0, 0.75, 1, 1.25}, {"skate3_vr_render_scale"});
+  if (auto* blocks = AddStringChoice(page, "VRAM Block Size",
+      "Preferred Vulkan memory block size. Smaller blocks may reduce individual paging spikes. Takes effect after a restart.",
+      {"16 MiB", "32 MiB (Default)", "64 MiB"}, {"16", "32", "64"}, "vulkan_native_vma_block_mb")) {
+    blocks->restart = true;
+  }
   auto distance = [&](const char* title, const char* cvar, int minimum, int maximum,
                       const char* desc, std::function<bool()> enabled = {}) {
     std::vector<std::string> labels;
@@ -470,6 +476,7 @@ void AddVrRows(Page& page) {
   action("Capture VR frame", "Save the next game frame locally for visual troubleshooting.", [] {
     rex::cvar::SetFlagByName("skate3_vr_capture_once", "true");
   });
+  return page;
 }
 
 Page BuildViewPage() {
@@ -498,7 +505,6 @@ Page BuildViewPage() {
   AddToggle(page, "Renderer Indicator",
             "Corner readout of which renderer drew the last frame (Native or Emulated).",
             {"skate3_native_render_mode_indicator"});
-  AddVrRows(page);
   return page;
 }
 
@@ -527,11 +533,16 @@ Page BuildControlsPage(const RestartSettings& settings) {
   return page;
 }
 
-Page BuildSystemPage(const RestartSettings& settings) {
+Page BuildSystemPage(const RestartSettings& settings, bool include_overlay) {
   Page page{"System"};
   AddToggle(page, "Mute", "Silences all game audio.", {"audio_mute"});
   AddRestart(page, settings, "audio_buffer");
   AddRestart(page, settings, "language");
+  if (include_overlay) {
+    AddRow(page, "All PC Settings", "Open the full PC settings overlay.")->action = [] {
+      if (g_open_settings) g_open_settings();
+    };
+  }
   return page;
 }
 
@@ -570,11 +581,13 @@ void BuildMenu() {
     std::string id = setting.id;
     settings.emplace(std::move(id), std::move(setting));
   }
+  Page vr_page = BuildVrPage();
+  const bool has_vr = !vr_page.rows.empty();
   for (Page page : {BuildDisplayPage(settings), BuildGraphicsPage(settings), BuildViewPage(),
-                    BuildControlsPage(settings), BuildSystemPage(settings)}) {
+                    std::move(vr_page), BuildControlsPage(settings), BuildSystemPage(settings, has_vr)}) {
     AddMenuPage(std::move(page));
   }
-  g_root_rows.push_back({"All PC Settings", 0, kOverlayPage});
+  if (!has_vr) g_root_rows.push_back({"All PC Settings", 0, kOverlayPage});
   g_root_rows.push_back({"Quit Game", 0, kQuitPage});
   static_assert(std::size(kSpareOptions) >= 7, "one spare option id per root row");
   for (size_t i = 0; i < g_root_rows.size(); ++i) {

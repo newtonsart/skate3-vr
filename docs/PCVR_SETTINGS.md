@@ -1,6 +1,6 @@
 # VR settings and pause over the stereo world
 
-VR settings are available directly in the game's **Options → View** page,
+VR settings are available directly in the game's **Options → VR** page,
 using the original menu's controls and descriptions. Long categories are split
 into numbered pages with **Previous page** and **Next page** action rows; each
 page contains at most eight rows including navigation. Back returns to the
@@ -16,7 +16,8 @@ are released. The game's HUD/menu draws are hidden in the world-eye preview
 while editing, so the native Options page does not obscure the scene.
 Recenter and frame capture are also native action rows.
 
-The alternative **RB + Start → Video** panel remains available. The OpenXR
+The alternative **RB + Start → VR** panel remains available. In VR, the
+native menu also links to it through **System → All PC Settings**. The OpenXR
 build draws that panel into a Vulkan texture and composes it in the headset,
 with independent eye views behind it. The same surface serves live editors
 and system dialogs.
@@ -35,15 +36,22 @@ still require hardware validation.
 
 ## Access and options
 
-- **Start → Options → View** opens the native VR controls.
+- **Start → Options → VR** opens the native VR controls.
 - **RB + Start** opens settings with the default controller chord. If you
   changed Menu Shortcut under Controls, use that combination instead.
 - **F1** or **Escape** opens settings from the keyboard.
-- The existing controller navigation selects Video and its rows, steps values
+- The existing controller navigation selects VR and its rows, steps values
   left/right, and goes back with B. Reset uses Y (R on keyboard).
-- Changes apply immediately and use the existing per-user settings file.
+- Changes use the existing per-user settings file. **VRAM Block Size** applies
+  after restarting. It controls the preferred Vulkan allocation block size in
+  VR and offers **16, 32, and 64 MiB**. The default is **32 MiB**.
 
-Video includes VR mode and render resolution, window width/distance/height, additional immersive-camera
+For comparison runs, `--skate3_vr_reserve_vram=true` reserves one block's
+worth of texture memory during flat VR loading and releases it when the native
+world resumes. The experiment is opt-in. The allocator can reuse that space,
+but the graphics driver controls when the memory becomes resident.
+
+VR includes view mode and render resolution, window width/distance/height, additional immersive-camera
 distance/height, world scale, HUD width/distance, pause presentation and recenter.
 Camera distance is an offset from the game's current follow camera, not an
 absolute distance to the skater. Positive values move backward, positive height
@@ -114,7 +122,7 @@ the desktop render extent. This avoids compressing their original UI into a
 portrait eye target. The chosen HMD resolution is restored for stereo gameplay;
 the saved quality preference is not changed.
 
-**Capture VR frame** under Video (or Ctrl+F7 with the game focused) captures
+**Capture VR frame** under VR (or Ctrl+F7 with the game focused) captures
 the next available game frame, including flat menus and loading screens.
 It saves local `out/vr-menu-*.ppm` or `out/vr-eye-*.ppm` files next to the running
 application’s working directory. This contains the game image, not camera passthrough.
