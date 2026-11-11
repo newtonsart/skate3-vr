@@ -155,6 +155,8 @@ int main() {
             self.assertIn("mirror_end_();", (sdk / FILES[10]).read_text())
             self.assertIn("command_buffers[3]", (sdk / FILES[12]).read_text())
             self.assertIn("NativeRhiApplyOutputSizeOverride(guest_output_width", (sdk / FILES[13]).read_text())
+            self.assertIn("VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT", (sdk / FILES[6]).read_text())
+            self.assertIn("NativeRhiTryStreamTexture", (sdk / FILES[5]).read_text())
 
     def test_refuse_source_checkout(self):
         with tempfile.TemporaryDirectory() as directory:

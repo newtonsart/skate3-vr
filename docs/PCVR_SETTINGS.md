@@ -51,6 +51,16 @@ worth of texture memory during flat VR loading and releases it when the native
 world resumes. The experiment is opt-in. The allocator can reuse that space,
 but the graphics driver controls when the memory becomes resident.
 
+`--skate3_vr_stream_textures=true` enables the experimental texture budget
+during Vulkan VR gameplay. Decode workers try to use space in existing
+device-local blocks for speculative world textures. At most eight speculative
+results and normally up to 2 MiB of staging data are submitted per frame.
+A large result can use the whole budget. If no block fits, workers can try
+one small allocation within the Vulkan memory budget every four stereo frames.
+Visible misses keep their existing
+priority. The game camera's motion favors nearby queued world geometry along
+the projected path, after the oldest result.
+
 VR includes view mode and render resolution, window width/distance/height, additional immersive-camera
 distance/height, world scale, HUD width/distance, pause presentation and recenter.
 Camera distance is an offset from the game's current follow camera, not an

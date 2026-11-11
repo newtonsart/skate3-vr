@@ -11,6 +11,7 @@
 #include "window_facing.h"
 #include "hud_backdrop.h"
 #include "hud_clip.h"
+#include "texture_streaming.h"
 #include <algorithm>
 #include <limits>
 #include <cmath>
@@ -45,6 +46,24 @@ int main() {
     Check(trace.frames==1 && trace.slow==0 && trace.repeated==0 && trace.yaw_travel==0);
   }
   using namespace skate3::vr;
+  {
+    TextureStreamBudget uploads;
+    Check(uploads.Take(1024 * 1024));
+    Check(!uploads.Take(TextureStreamBudget::kBytes));
+    Check(uploads.Take(1024 * 1024));
+    Check(!uploads.Take(1));
+    while (uploads.results < TextureStreamBudget::kResults) Check(uploads.Take(0));
+    Check(!uploads.Take(0));
+    TextureStreamBudget large;
+    Check(large.Take(0) && large.Take(5 * 1024 * 1024) && !large.Take(1));
+    Check(!CanGrowTextureBlocks(7, 8, 1) && CanGrowTextureBlocks(8, 8, 1));
+    Check(!CanGrowTextureBlocks(8, 8, TextureStreamBudget::kBytes + 1));
+
+    const auto ahead = PredictStreamPosition({0, 0}, {1, 0}, 0.1f);
+    Check(std::abs(ahead[0] - 4.5f) < 0.001f && ahead[1] == 0);
+    Check(PredictStreamPosition({0, 0}, {30, 0}, 0.1f)[0] == 30);
+    Check(PredictStreamPosition({0, 0}, {1, 0}, 0.5f)[0] == 1);
+  }
   {
     Check(!SimulatedRouteControls(-1).connected && !SimulatedRouteControls(90).connected);
     Check(!SimulatedRouteControls(std::numeric_limits<double>::quiet_NaN()).connected);

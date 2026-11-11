@@ -71,10 +71,14 @@ REXCVAR_DEFINE_BOOL(skate3_vr_static_frustum_cull, true, "VR",
 #include "vr/game_vr.h"
 #include "vr/hud_backdrop.h"
 #include "vr/presentation.h"
+#include "vr/texture_streaming.h"
 #include <rex/graphics/vulkan/native_rhi_vulkan.h>
 
 REXCVAR_DEFINE_BOOL(skate3_vr_reserve_vram, false, "VR",
                     "Experimentally reserve one block of texture memory during flat loading")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(skate3_vr_stream_textures, false, "VR",
+                    "Budget speculative world texture uploads in Vulkan VR")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 #endif
 
@@ -650,6 +654,10 @@ struct StagedTexCommit {
   nrhi::Swizzle swizzle[4] = {nrhi::Swizzle::kX, nrhi::Swizzle::kY,
                               nrhi::Swizzle::kZ, nrhi::Swizzle::kW};
   uint32_t mip_count = 0;
+#if SKATE3_HAS_OPENXR
+  bool speculative = false;
+  bool allocation_deferred = false;
+#endif
   // Cube map (environment cubes): mips[] holds face-major (face * levels +
   // mip) subresource copies, the old D3D12 subresource numbering, which the
   // commit decomposes back into (face, mip), and the SRV is a kCube view
@@ -665,6 +673,42 @@ struct StagedTexCommit {
   StagedMipCopy mips[64] = {};
 };
 thread_local StagedTexCommit* g_tex_stage_out = nullptr;
+
+#if SKATE3_HAS_OPENXR
+std::atomic<bool> g_budget_stream_textures{false};
+std::atomic<uint64_t> g_stream_reused{0}, g_stream_grew{0}, g_stream_no_space{0};
+std::atomic<uint64_t> g_stream_next_growth_frame{0};
+#endif
+
+nrhi::Texture* CreateGuestTexture(nrhi::Device* device, const nrhi::TextureDesc& desc,
+                                  uint64_t upload_bytes) {
+#if SKATE3_HAS_OPENXR
+  if (g_tex_stage_out && g_tex_stage_out->speculative) {
+    using rex::graphics::vulkan::NativeRhiTryStreamTexture;
+    if (auto* texture = NativeRhiTryStreamTexture(device, desc, true)) {
+      g_stream_reused.fetch_add(1, std::memory_order_relaxed);
+      return texture;
+    }
+    const auto frame = g_frames_rendered.load(std::memory_order_relaxed);
+    auto next = g_stream_next_growth_frame.load(std::memory_order_relaxed);
+    // Both eyes advance the renderer's counter, so eight renders span four stereo frames.
+    if (skate3::vr::CanGrowTextureBlocks(frame, next, upload_bytes) &&
+        g_stream_next_growth_frame.compare_exchange_strong(next, frame + 8,
+                                                           std::memory_order_relaxed)) {
+      if (auto* texture = NativeRhiTryStreamTexture(device, desc, false)) {
+        g_stream_grew.fetch_add(1, std::memory_order_relaxed);
+        return texture;
+      }
+    }
+    g_tex_stage_out->allocation_deferred = true;
+    g_stream_no_space.fetch_add(1, std::memory_order_relaxed);
+    return nullptr;
+  }
+#else
+  (void)upload_bytes;
+#endif
+  return device->CreateTexture(desc);
+}
 
 // Render-thread half: record the staged upload's copies + barrier, create
 // the SRV, mark the texture live. On view-creation failure the texture stays
@@ -1753,7 +1797,7 @@ bool UploadGeneratedMips(const NativeGuestOutputRenderContext& context, uint8_t*
   desc.mip_levels = mip_count;
   desc.format = nrhi::Format::kR8G8B8A8_UNORM;
   desc.initial_state = nrhi::ResourceState::kCopyDest;
-  out.texture = device->CreateTexture(desc);
+  out.texture = CreateGuestTexture(device, desc, upload_size);
   if (out.texture == nullptr) {
     return false;
   }
@@ -2048,7 +2092,7 @@ bool EnsureGuestTextureFromWords(const NativeGuestOutputRenderContext& context,
   desc.format = host.resource_format;
   desc.initial_state = nrhi::ResourceState::kCopyDest;
   const auto create_t0 = PerfClock::now();
-  out.texture = device->CreateTexture(desc);
+  out.texture = CreateGuestTexture(device, desc, upload_size);
   if (out.texture == nullptr) {
     return false;
   }
@@ -5328,6 +5372,9 @@ void ProcessPrewarmEntry(uint8_t* base, const PrewarmEntry& e) {
     }
     StagedTexResult tr;
     tr.words_key = wkey;
+#if SKATE3_HAS_OPENXR
+    tr.commit.speculative = !e.miss && g_budget_stream_textures.load(std::memory_order_relaxed);
+#endif
     // Staged mode uses only context.device (copies/barrier/SRV are
     // exported for the commit), so a device-only context suffices.
     NativeGuestOutputRenderContext stage_ctx{};
@@ -5335,6 +5382,11 @@ void ProcessPrewarmEntry(uint8_t* base, const PrewarmEntry& e) {
     g_tex_stage_out = &tr.commit;
     tr.valid = EnsureGuestTextureFromWords(stage_ctx, base, words, tr.gt);
     g_tex_stage_out = nullptr;
+#if SKATE3_HAS_OPENXR
+    // shortcut: a full block leaves this to the visible miss path; revisit if
+    // traces show repeated misses for the same approaching sector.
+    if (tr.commit.allocation_deferred) return;
+#endif
     if (!tr.valid) {
       std::memcpy(tr.gt.fetch_words, words, sizeof(tr.gt.fetch_words));
     }
@@ -5482,13 +5534,51 @@ void EnsurePrewarmWorkers() {
   REXLOG_INFO("native-scene: {} prewarm decode workers started", n);
 }
 
+#if SKATE3_HAS_OPENXR
+void PrioritizeApproachingPrewarm(std::vector<PrewarmResult>& pending, const FrameScene& scene) {
+  static std::array<float, 2> previous{}, predicted{};
+  static PerfClock::time_point sampled_at;
+  static uint64_t sampled_scene = 0;
+  const std::array<float, 2> current{scene.cam_pos[0], scene.cam_pos[2]};
+  if (sampled_at == PerfClock::time_point{} || sampled_scene != scene.generation) {
+    const auto now = PerfClock::now();
+    predicted = skate3::vr::PredictStreamPosition(
+        previous, current, std::chrono::duration<float>(now - sampled_at).count());
+    sampled_at = now;
+    sampled_scene = scene.generation;
+    previous = current;
+  }
+  if (predicted == current || PerfClock::now() - sampled_at > std::chrono::milliseconds(150)) return;
+
+  // The optimesh registration has local bounds but no instance transform.
+  // Use the baked world geometry as a hint and keep the oldest entry first.
+  size_t best = 0;
+  float best_distance = 35.0f * 35.0f;
+  for (size_t i = 1; i < std::min<size_t>(pending.size(), 16); ++i) {
+    const auto& r = pending[i];
+    if (r.miss || r.textures.empty() || !r.buffers.cull_bounds_valid ||
+        r.item.skinned || r.item.dynobj || r.item.unlit) continue;
+    const auto& low = r.buffers.cull_bbox_min;
+    const auto& high = r.buffers.cull_bbox_max;
+    const float dx = predicted[0] - std::clamp(predicted[0], low[0], high[0]);
+    const float dz = predicted[1] - std::clamp(predicted[1], low[2], high[2]);
+    const float distance = dx * dx + dz * dz;
+    if (distance < best_distance) {
+      best_distance = distance;
+      best = i;
+    }
+  }
+  if (best > 1) std::rotate(pending.begin() + 1, pending.begin() + best, pending.begin() + best + 1);
+}
+#endif
+
 // Render-thread commit of the workers' results: record GPU copies +
 // barriers, create SRVs, insert into the caches, re-inject retries.
 // Microseconds per item, safe to run every frame (loading, settle and
 // gameplay alike).
 void PrewarmCommit(const NativeGuestOutputRenderContext& context,
                    uint64_t frame_number, bool loading = false,
-                   bool flat_vr = false) {
+                   bool flat_vr = false, const FrameScene* stream_scene = nullptr) {
   {
     std::scoped_lock lock(g_prewarm_out_mutex, g_prewarm_mutex);
     if (!g_prewarm_retry.empty()) {
@@ -5507,6 +5597,14 @@ void PrewarmCommit(const NativeGuestOutputRenderContext& context,
     }
   }
   std::vector<PrewarmResult> done;
+  bool budget_stream = false;
+#if SKATE3_HAS_OPENXR
+  budget_stream = stream_scene && g_budget_stream_textures.load(std::memory_order_relaxed);
+  skate3::vr::TextureStreamBudget stream_budget;
+  size_t stream_deferred = 0;
+#else
+  (void)stream_scene;
+#endif
   {
     std::lock_guard<std::mutex> lock(g_prewarm_out_mutex);
     // Soft cap per frame: during the activation burst the workers can
@@ -5516,7 +5614,7 @@ void PrewarmCommit(const NativeGuestOutputRenderContext& context,
     // loading screen that is fine; in gameplay the cap stays small so a
     // streaming burst spreads over a few frames instead of hitching one.
     const size_t kMaxCommitPerFrame = loading ? 256 : 32;
-    if (g_prewarm_out.size() <= kMaxCommitPerFrame) {
+    if (!budget_stream && g_prewarm_out.size() <= kMaxCommitPerFrame) {
       done.swap(g_prewarm_out);
     } else {
       // Oldest first: draining from the END starved early results under a
@@ -5529,11 +5627,27 @@ void PrewarmCommit(const NativeGuestOutputRenderContext& context,
       // frame, so the bypass cannot recreate the commit hitch the cap
       // exists to prevent.
       std::vector<PrewarmResult> rest;
-      rest.reserve(g_prewarm_out.size());
+      if (!budget_stream) rest.reserve(g_prewarm_out.size());
       size_t taken = 0;
+#if SKATE3_HAS_OPENXR
+      if (budget_stream) PrioritizeApproachingPrewarm(g_prewarm_out, *stream_scene);
+#endif
       for (PrewarmResult& r : g_prewarm_out) {
         const bool is_miss = r.miss;
-        if (is_miss || taken < kMaxCommitPerFrame) {
+        bool take = is_miss || taken < kMaxCommitPerFrame;
+#if SKATE3_HAS_OPENXR
+        if (budget_stream && !is_miss) {
+          uint64_t bytes = 0;
+          if (stream_budget.results < skate3::vr::TextureStreamBudget::kResults) {
+            for (const StagedTexResult& t : r.textures) {
+              if (t.valid && t.gt.upload) bytes += t.gt.upload->size();
+            }
+          }
+          take = stream_budget.Take(bytes);
+          if (!take) ++stream_deferred;
+        }
+#endif
+        if (take) {
           if (!is_miss) {
             ++taken;
           }
@@ -5545,6 +5659,26 @@ void PrewarmCommit(const NativeGuestOutputRenderContext& context,
       g_prewarm_out.swap(rest);
     }
   }
+#if SKATE3_HAS_OPENXR
+  if (budget_stream && REXCVAR_GET(skate3_native_render_scene_perf_log)) {
+    static uint32_t frames = 0;
+    static uint64_t peak_bytes = 0;
+    static size_t peak_deferred = 0;
+    peak_bytes = std::max(peak_bytes, stream_budget.bytes);
+    peak_deferred = std::max(peak_deferred, stream_deferred);
+    if (++frames % 120 == 0) {
+      const auto reused = g_stream_reused.exchange(0, std::memory_order_relaxed);
+      const auto growth = g_stream_grew.exchange(0, std::memory_order_relaxed);
+      const auto no_space = g_stream_no_space.exchange(0, std::memory_order_relaxed);
+      if (reused || growth || no_space || peak_deferred) {
+        REXLOG_INFO("native-scene: VR stream reused={} growth={} no-space={} deferred-peak={} upload-peak={:.2f}MiB",
+                    reused, growth, no_space, peak_deferred, double(peak_bytes) / (1 << 20));
+      }
+      peak_bytes = 0;
+      peak_deferred = 0;
+    }
+  }
+#endif
   if (done.empty()) {
     return;
   }
@@ -5798,8 +5932,10 @@ void PrewarmCommit(const NativeGuestOutputRenderContext& context,
   {
     std::lock_guard<std::mutex> lock(g_prewarm_mutex);
     for (const PrewarmResult& r : done) {
+      if (!r.miss) continue;
       if (r.item.mesh != 0) {
         g_miss_inflight_mesh.erase(r.item.mesh);
+        continue;
       }
       for (const StagedTexResult& t : r.textures) {
         if (t.words_key != 0) {
@@ -8909,7 +9045,15 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   // Native loading frames take the loading-screen commit budget; the heavy
   // decode lifting behind the load is unchanged from the yielded path.
   // Keep the resident resource set stable between eyes of one stereo frame.
-  if (!second_vr_eye) PrewarmCommit(context, frame_number, /*loading=*/loading_native);
+  const FrameScene* stream_scene = nullptr;
+#if SKATE3_HAS_OPENXR
+  if (auto* eye = static_cast<skate3::vr::EyeCamera*>(user_data); eye && !loading_native) {
+    stream_scene = eye->scene.get();
+  }
+#endif
+  if (!second_vr_eye) {
+    PrewarmCommit(context, frame_number, /*loading=*/loading_native, false, stream_scene);
+  }
   // Content-store LRU: superseded words states (old mip levels, pre-demote
   // detail sets, one-shot UI art) age out once nothing routes to them; the
   // mesh cache ages out streamed-out arenas the same way.
@@ -13229,6 +13373,8 @@ void Install() {
       [](const NativeGuestOutputRenderContext& context, void*) {
         std::shared_ptr<const FrameScene> scene;
         { std::lock_guard lock(g_scene_mutex); scene = g_scene; }
+        const bool streaming = REXCVAR_GET(skate3_vr_stream_textures) &&
+            context.backend == NativeGuestOutputBackend::kVulkan;
         if (skate3::vr::GameVrEnabled()) {
           static bool seen_gameplay=false;
           static bool reserve_attempted=false;
@@ -13238,9 +13384,13 @@ void Install() {
           const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
               PerfClock::now().time_since_epoch()).count();
           const bool has_items=scene && !scene->items.empty();
-          if (!skate3::vr::CanPresentWorld(has_items,
+          const bool present_world = skate3::vr::CanPresentWorld(has_items,
               now-g_last_publish_ns.load(),in_menus,
-              rex::cvar::Query<bool>("skate3_vr_pause_in_world"),seen_gameplay)) {
+              rex::cvar::Query<bool>("skate3_vr_pause_in_world"),seen_gameplay);
+          if (streaming) {
+            g_budget_stream_textures.store(present_world && !in_menus, std::memory_order_relaxed);
+          }
+          if (!present_world) {
             // Flat XR loading uses the guest image, so RenderScene cannot
             // start the registered-mesh prewarm or commit its results here.
             if (context.backend == NativeGuestOutputBackend::kVulkan && SceneEnabled() &&
@@ -13264,6 +13414,11 @@ void Install() {
             rex::graphics::vulkan::NativeRhiHoldTextureReserve(context.device, false);
             reserve_attempted=false;
           }
+        } else if (streaming && rex::cvar::Query<bool>("skate3_vr_simulate_route") &&
+                   rex::cvar::Query<bool>("skate3_vr_compare_frame_work")) {
+          g_budget_stream_textures.store(scene && scene->generation > 300 &&
+              scene->items.size() > 100 && rex::kernel::guest_presence::GameplayContextValue() == 1,
+              std::memory_order_relaxed);
         }
         return skate3::vr::RenderStereo(context, std::move(scene), &RenderScene);
       }, nullptr);

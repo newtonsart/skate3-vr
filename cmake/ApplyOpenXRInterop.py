@@ -741,6 +741,45 @@ uint32_t NativeRhiOriginalOutputHeight() {
 void NativeRhiHoldTextureReserve(nrhi::Device* device, bool hold) {
   static_cast<NrDeviceVulkan*>(device)->HoldTextureReserve(hold);
 }""")
+    edit("include/rex/graphics/vulkan/native_rhi_vulkan.h",
+         "void NativeRhiHoldTextureReserve(nrhi::Device* device, bool hold);",
+         """void NativeRhiHoldTextureReserve(nrhi::Device* device, bool hold);
+nrhi::Texture* NativeRhiTryStreamTexture(nrhi::Device* device, const nrhi::TextureDesc& desc,
+                                         bool reuse_only);""")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         "  nrhi::Texture* CreateTexture(const nrhi::TextureDesc& desc) override {",
+         """  nrhi::Texture* CreateTexture(const nrhi::TextureDesc& desc) override {
+    return CreateTexture(desc, 0);
+  }
+
+  nrhi::Texture* CreateTexture(const nrhi::TextureDesc& desc, VmaAllocationCreateFlags stream_flags) {""")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         """    alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    VkImage image = VK_NULL_HANDLE;""",
+         """    alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    if (stream_flags) {
+      alloc_info.flags = stream_flags;
+      alloc_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    }
+    VkImage image = VK_NULL_HANDLE;""")
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         '      REXLOG_ERROR("nrhi-vulkan: texture creation failed ({}x{} fmt {})", desc.width, desc.height,',
+         '      if (stream_flags) return nullptr;\n'
+         '      REXLOG_ERROR("nrhi-vulkan: texture creation failed ({}x{} fmt {})", desc.width, desc.height,')
+    edit("src/graphics/vulkan/native_rhi_vulkan.cpp",
+         """void NativeRhiHoldTextureReserve(nrhi::Device* device, bool hold) {
+  static_cast<NrDeviceVulkan*>(device)->HoldTextureReserve(hold);
+}""",
+         """void NativeRhiHoldTextureReserve(nrhi::Device* device, bool hold) {
+  static_cast<NrDeviceVulkan*>(device)->HoldTextureReserve(hold);
+}
+
+nrhi::Texture* NativeRhiTryStreamTexture(nrhi::Device* device, const nrhi::TextureDesc& desc,
+                                         bool reuse_only) {
+  VmaAllocationCreateFlags flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+  if (reuse_only) flags |= VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT;
+  return static_cast<NrDeviceVulkan*>(device)->CreateTexture(desc, flags);
+}""")
 
 
 if __name__ == "__main__":
