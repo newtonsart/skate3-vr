@@ -11,7 +11,9 @@ route = source[source.index('      auto rit = g_r.tex_routes.find(tex_ptr);'):so
 struct = header[header.index('  struct TexRoute {'):header.index('  std::unordered_map<uint32_t, TexRoute> tex_routes;')]
 prepared = source[source.index('      const bool prepare = prepare_item'):source.index('#endif\n      tex_pending = false;',source.index('      const bool prepare = prepare_item'))]
 sticky = header[header.index('  struct TexStickySite {'):header.index('  std::unordered_map<uint64_t, TexStickySite> tex_sticky;')]
+prune = source[source.index('constexpr double kTexRouteMaxIdleSeconds'):source.index('// Mesh cache LRU')]
 code = r'''
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -37,12 +39,14 @@ bool GetHostTextureFormat(xenos::TextureFormat f,HostTextureFormat&) {
   return uint32_t(f)==18;
 }
 '''+reader+r'''
-struct GuestTexture {};
+struct GuestTexture { bool valid = false; };
 struct RendererState {
 '''+struct+r'''
   std::unordered_map<uint32_t,TexRoute> tex_routes;
 '''+sticky+r'''
-  std::unordered_map<uint64_t,TexStickySite> tex_sticky;
+  std::unordered_map<uint64_t,TexStickySite> tex_sticky, words_sticky;
+  std::unordered_map<uint64_t,TexStickySite> tex_pending_first;
+  std::unordered_map<uint64_t,GuestTexture> tex_store;
   uint64_t texture_revision=0;
   GuestTexture white;
 } g_r;
@@ -76,6 +80,36 @@ const GuestTexture* Reuse(uint32_t tex_ptr,uint64_t piece,uint64_t frame_number,
   bool tex_pending=true;
 '''+prepared+r'''
   return nullptr;
+}
+#define REXCVAR_GET(...) 20
+constexpr uint64_t kStoreByteScanIntervalFrames=120;
+constexpr double kTexEvictMinIdleSeconds=45;
+double g_evict_fps_estimate=120;
+'''+prune+r'''
+void CheckPruning() {
+  constexpr uint64_t now=10'000;
+  g_r={};
+  g_r.tex_routes[1].key=100;
+  g_r.tex_routes[2].key=200;
+  g_r.tex_routes[3].last_used_frame=now;
+  g_r.tex_store[200].valid=true;
+  g_r.tex_sticky[1].words_key=100;
+  g_r.words_sticky[1].words_key=100;
+  g_r.tex_pending_first[1].last_used_frame=0;
+  g_r.tex_pending_first[2].last_used_frame=now;
+  PruneTexRouting(now);
+  PruneTexRouting(now+19);
+  assert(g_r.tex_routes.contains(1));
+  PruneTexRouting(now+20);
+  assert(!g_r.tex_routes.contains(1) && g_r.tex_routes.contains(2) && g_r.tex_routes.contains(3));
+  assert(g_r.tex_sticky.contains(1) && g_r.words_sticky.contains(1) && g_r.tex_pending_first.contains(1));
+  PruneTexRouting(now+50);
+  assert(!g_r.tex_sticky.contains(1) && g_r.words_sticky.contains(1));
+  PruneTexRouting(now+80);
+  assert(!g_r.words_sticky.contains(1) && g_r.tex_pending_first.contains(1));
+  PruneTexRouting(now+110);
+  assert(!g_r.tex_pending_first.contains(1) && g_r.tex_pending_first.contains(2));
+  assert(g_r.tex_store.at(200).valid && g_tex_routing_pruned==4);
 }
 int main() {
   auto& site=g_r.tex_sticky[7];
@@ -129,6 +163,8 @@ int main() {
   g_r.tex_routes.clear(); Words(0,0); ++frame_number; Resolve();
   assert(g_r.tex_routes.empty());
   Words(2,0x56789052); Resolve(); assert(g_r.tex_routes.size()==1);
+  CheckPruning();
+  puts("PASS: texture route sweeps are staggered and keep recent routes and resident textures");
   puts("PASS: one stable read per frame; next-frame updates, demote/re-promote, freed/unreadable objects, retained items and recovery");
 }
 '''

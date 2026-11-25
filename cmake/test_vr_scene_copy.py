@@ -2,9 +2,6 @@ from pathlib import Path
 import subprocess,tempfile
 root=Path(__file__).resolve().parents[1]
 s=(root/'src/vr/game_vr.cpp').read_text()
-a=s.index('  std::shared_ptr<native_scene::FrameScene> scene_copy;')
-b=s.index('  int settings_editor=',a)
-method=s[a:b]
 native=(root/'src/skate3_native_scene.cpp').read_text()
 start=native.index('SceneOverlays SnapshotSceneOverlays()')
 overlays=native[start:native.index('void GetCapturedSunDir',start)]
@@ -25,9 +22,6 @@ std::shared_ptr<const std::vector<SplineDraw>> g_scene_spline;
 '''+overlays+r'''
 }
 namespace native_scene=skate3::native_scene;
-struct Cache {
-'''+method+r'''
-};
 int main() {
   {
     using namespace native_scene;
@@ -45,40 +39,24 @@ int main() {
   source.items.resize(2048);
   for (auto& item:source.items) { item.draws.resize(3); item.bones.resize(48,1.f); }
   source.generation=12; source.view_proj[0]=5;
-  Cache cache;
-  auto first=cache.CopyScene(source);
-  auto* items=first->items.data(); auto* draws=first->items[0].draws.data();
-  auto* bones=first->items[0].bones.data();
-  first->view_proj[0]=7; first->items[0].bones[0]=9;
-  assert(source.view_proj[0]==5 && source.items[0].bones[0]==1);
-  first.reset(); source.generation=13; source.items[0].draws[0].index_count=77;
-  auto second=cache.CopyScene(source);
-  assert(second->generation==13 && second->view_proj[0]==5);
-  assert(second->items[0].bones[0]==1 && second->items[0].draws[0].index_count==77);
-  assert(second->items.data()==items && second->items[0].draws.data()==draws && second->items[0].bones.data()==bones);
-  second.reset();
-  constexpr int count=300;
-  using Clock=std::chrono::steady_clock;
-  auto start=Clock::now();
-  for(int i=0;i<count;++i) {
-    auto copy=std::make_shared<native_scene::FrameScene>(source);
-    assert(copy->items.size()==2048);
-  }
-  auto middle=Clock::now();
-  for(int i=0;i<count;++i) {
-    auto copy=cache.CopyScene(source);
-    assert(copy->items.size()==2048);
-  }
-  auto end=Clock::now();
-  printf("Scene-copy CPU only: fresh %.4f ms, reused %.4f ms per frame\n",
-    std::chrono::duration<double,std::milli>(middle-start).count()/count,
-    std::chrono::duration<double,std::milli>(end-middle).count()/count);
-  for(size_t n : {0u,3u,4096u,17u}) {
-    source.items.resize(n); source.generation++;
-    auto copy=cache.CopyScene(source);
-    assert(copy->items.size()==n && copy->generation==source.generation);
-  }
-  puts("PASS: copied cameras and nested data stay isolated; capacities reused; size changes copied");
+  source.cam_pos[0]=4; source.ui_blur=2;
+  source.occl_build_skipped={7,9};
+  const auto published=std::make_shared<const native_scene::FrameScene>(source);
+  native_scene::FrameSceneView left(*published), right(*published);
+  left.view_proj[0]=7; left.cam_pos[0]=0; left.ui_blur=0;
+  right.view_proj[0]=8;
+  assert(left.generation==12 && right.generation==12);
+  assert(published->view_proj[0]==5 && left.view_proj[0]==7 && right.view_proj[0]==8);
+  assert(right.cam_pos[0]==4 && right.ui_blur==2);
+  assert(left.items.data()==published->items.data() && right.items.data()==left.items.data());
+  assert(right.items[0].bones.data()==published->items[0].bones.data());
+  assert(right.items[0].draws.data()==published->items[0].draws.data());
+  assert(left.occl_build_skipped.data()==published->occl_build_skipped.data());
+  assert(left.occl_build_skipped.size()==2 && left.occl_build_skipped[1]==9);
+  source.items.clear();
+  native_scene::FrameSceneView empty(source);
+  assert(empty.items.empty() && right.items.size()==2048);
+  puts("PASS: both eye cameras are independent and borrow immutable geometry from the retained frame");
 }
 '''
 (root/'out/test-temp').mkdir(parents=True,exist_ok=True)

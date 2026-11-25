@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 #include "native/screen_fx.h"
@@ -333,7 +334,7 @@ struct DrawItem {
   std::vector<DrawEntry> draws;
 };
 
-struct FrameScene {
+struct FrameSceneState {
   uint64_t generation = 0;
   float view_proj[16] = {};
   float cam_pos[3] = {};
@@ -475,12 +476,26 @@ struct FrameScene {
   // editor's complete chain. GetScreenFxSnapshot also publishes it during
   // frames that retain the previous world scene.
   using ScreenFx = ScreenFxState;
+};
+
+struct FrameScene : FrameSceneState {
   std::vector<DrawItem> items;
   // MeshContexts the build-side occlusion skip left out of `items` this
   // frame (see skate3_native_render_scene_occlusion_cull_build): the
   // render thread re-publishes them as culled so the guest dispatch filter
   // keeps excluding them between their staggered rebuild frames.
   std::vector<uint32_t> occl_build_skipped;
+};
+
+// Per-eye camera state with the geometry of the retained guest snapshot.
+struct FrameSceneView : FrameSceneState {
+  explicit FrameSceneView(const FrameScene& source)
+      : FrameSceneState(source),
+        items(source.items),
+        occl_build_skipped(source.occl_build_skipped) {}
+
+  std::span<const DrawItem> items;
+  std::span<const uint32_t> occl_build_skipped;
 };
 
 // Current guest frame's final screen effect. Published even when the

@@ -74,7 +74,7 @@ REXCVAR_DEFINE_DOUBLE(skate3_vr_hud_width, 1.6, "VR", "Readable HUD panel width 
 REXCVAR_DEFINE_DOUBLE(skate3_vr_hud_distance, 2.0, "VR", "HUD convergence distance in meters").range(0.5,5.0);
 REXCVAR_DEFINE_BOOL(skate3_vr_linear_color, true, "VR", "Decode display color before OpenXR composition");
 REXCVAR_DEFINE_BOOL(skate3_vr_expand_game_frustum, true, "VR", "Expand the matched main-camera culling planes for head turns");
-REXCVAR_DEFINE_BOOL(skate3_vr_share_frame_work, true, "VR", "Share the scene copy and light-space shadows between eyes");
+REXCVAR_DEFINE_BOOL(skate3_vr_share_frame_work, true, "VR", "Share draw preparation and light-space shadows between eyes");
 REXCVAR_DEFINE_BOOL(skate3_vr_gpu_timing, false, "VR", "Measure GPU render and transfer times per eye")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(skate3_vr_perf_trace, false, "VR", "Log periodic VR frame timing summaries");
@@ -121,13 +121,6 @@ struct State {
   bool settings_fps_only=false;
   uint32_t settings_generation=0;
   FpsPanelLayout fps_crop;
-  std::shared_ptr<native_scene::FrameScene> scene_copy;
-  std::shared_ptr<native_scene::FrameScene> CopyScene(const native_scene::FrameScene& source) {
-    // Both eyes finish before the next copy; retain nested vector capacity.
-    if (!scene_copy) scene_copy=std::make_shared<native_scene::FrameScene>();
-    *scene_copy=source;
-    return scene_copy;
-  }
   int settings_editor=0;
   float settings_aspect=16.0f/9;
   double render_scale=-1;
@@ -450,9 +443,7 @@ struct State {
     const bool share=perf_samples%2==0;
     double cpu_ms=0,copy_ms=0,gpu_ms=0,begin_ms=0,flush_ms=0,query_ms=0;
     const auto copy_start=std::chrono::steady_clock::now();
-    auto render_scene=share ? CopyScene(*scene) : nullptr;
     const auto overlays=native_scene::SnapshotSceneOverlays();
-    if (share) cpu_ms=copy_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-copy_start).count();
     for (int eye=0;eye<2;++eye) {
       if (eye) {
         const auto begin_start=std::chrono::steady_clock::now();
@@ -461,7 +452,7 @@ struct State {
         begin_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin_start).count();
       }
       EyeCamera camera; camera.scene=scene; camera.eye_index=eye;
-      camera.render_scene=render_scene;
+      camera.share_preparation=share;
       camera.overlays=&overlays;
       camera.override_camera=true; camera.shadows=share?&shadows:nullptr;
       std::copy(scene->view_proj,scene->view_proj+16,camera.view_proj);
@@ -496,9 +487,6 @@ struct State {
       if (duration<0) return rendered;
       gpu_ms+=duration;
     }
-    const auto release_start=std::chrono::steady_clock::now();
-    render_scene.reset();
-    cpu_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-release_start).count();
     const double pair_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-copy_start).count();
     REXLOG_INFO("VR perf sample: mode={} display={} items={} CPU-render={:.4f} CPU-scene-copy={:.4f} GPU-render={:.4f} GPU-copy=-1 pair-total={:.4f} CPU-begin={:.4f} CPU-flush={:.4f} CPU-query={:.4f}",
         share?"shared":"separate",REXCVAR_GET(skate3_vr)?"desktop":"simulated",scene->items.size(),cpu_ms,copy_ms,gpu_ms,pair_ms,begin_ms,flush_ms,query_ms);
@@ -934,11 +922,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
     StereoShadows shadows;
     const bool compare=REXCVAR_GET(skate3_vr_compare_frame_work) && s.perf_samples<600;
     const bool share_work=compare ? s.perf_samples%2==0 : REXCVAR_GET(skate3_vr_share_frame_work);
-    const auto scene_copy_start=std::chrono::steady_clock::now();
-    auto render_scene=share_work && scene && !photo_flat ? s.CopyScene(*scene) : nullptr;
-    const double shared_scene_copy_ms=render_scene ?
-        std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-scene_copy_start).count() : 0;
-    scene_copy_ms[0]=shared_scene_copy_ms;
+    const auto overlays_start=FrameClock::now();
     const auto overlays=native_scene::SnapshotSceneOverlays();
     // Photo capture/card composition is a mono game operation, not two eye-side effects.
     for(int eye=0;eye<(photo_flat ? 1 : 2);++eye) {
@@ -946,11 +930,10 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       if(eye) context.cmd=vulkan::NativeRhiBeginFrame(context.device,image.image,image.view,true,context.guest_output_width,context.guest_output_height,&context.guest_output);
       EyeCamera camera; camera.scene=scene; camera.eye_index=eye;
       camera.shadows=share_work ? &shadows : nullptr;
-      camera.render_scene=render_scene;
       camera.overlays=&overlays;
       camera.clear_hud_backdrop=!window && !photo && !object_editor && REXCVAR_GET(skate3_vr_clear_hud_backdrop);
       camera.capture_ui=capture && eye==0;
-      camera.share_preparation=!photo && !object_editor && !pause_menu;
+      camera.share_preparation=share_work && !photo && !object_editor && !pause_menu;
       if(scene && !scene->items.empty() && scene->proj[0]!=0 && !photo_flat) {
         if (window) {
           const XrPosef view_reference{panel_pose.orientation,frame.head.pose.position};
@@ -977,7 +960,6 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       if (s.timing) vulkan::NativeRhiTimestamp(context.device,s.timing,eye*2+1,false);
       eye_world[eye]=camera.override_camera;
       render_ms[eye]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-render_start).count();
-      if (!eye) render_ms[eye]+=shared_scene_copy_ms;
       scene_copy_ms[eye]+=camera.scene_copy_ms;
       frustum_skips[eye]=camera.frustum_skips; world_draws[eye]=camera.world_draws;
       mesh_reuses+=camera.mesh_reuses; material_reuses+=camera.material_reuses;
@@ -999,11 +981,6 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
       projections[eye].pose=frame.eyes[eye].pose; projections[eye].fov=frame.eyes[eye].fov;
       projections[eye].subImage.swapchain=s.eyes[eye].handle;
       projections[eye].subImage.imageRect.extent={int32_t(s.eyes[eye].width),int32_t(s.eyes[eye].height)};
-    }
-    if (render_scene) {
-      const auto release_start=std::chrono::steady_clock::now();
-      render_scene.reset();
-      render_ms[0]+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-release_start).count();
     }
     if(rendered) {
       const auto layers_start=FrameClock::now();
@@ -1106,7 +1083,7 @@ bool RenderStereo(const rex::graphics::NativeGuestOutputRenderContext& input,
         const double render=render_ms[0]+render_ms[1], transfer=copy_ms[0]+copy_ms[1];
         const double other_ms=std::max(0.0,interval-render-transfer-xr_wait_ms-end_ms);
         const FrameWorkTiming work{between_callbacks,FrameMs(callback_start,wait_start),
-            FrameMs(controls_start,controls_end),FrameMs(controls_end,scene_copy_start),
+            FrameMs(controls_start,controls_end),FrameMs(controls_end,overlays_start),
             eye_setup_ms,FrameMs(layers_start,end_start)-overlay_ms,overlay_ms};
         FrameTransfers transfers{{s.transfer_timing[0],s.transfer_timing[1]},{}};
         transfers.eyes[0].total=copy_ms[0]; transfers.eyes[1].total=copy_ms[1];

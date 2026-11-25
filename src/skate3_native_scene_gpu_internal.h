@@ -1248,7 +1248,7 @@ bool EnsureSsrPipeline(const NativeGuestOutputRenderContext& context);
 bool EnsureSsrTargets(const NativeGuestOutputRenderContext& context);
 bool EnsureHdrPipeline(const NativeGuestOutputRenderContext& context);
 bool ApplySsaoPass(const NativeGuestOutputRenderContext& context,
-                   nrhi::Cmd* cmd, const FrameScene& scene,
+                   nrhi::Cmd* cmd, const FrameSceneView& scene,
                    const nrhi::Viewport& viewport, const nrhi::Rect& scissor);
 // Occlusion grid without SSAO (KI-21): linearizes the scene depth into
 // ao_lin_depth and records the same grid reduce + readback ApplySsaoPass
@@ -1257,16 +1257,16 @@ bool ApplySsaoPass(const NativeGuestOutputRenderContext& context,
 // layout changed; ao_lin_depth then holds this frame's linear depth, like
 // after the SSAO pass).
 bool ApplyOcclusionGridPass(const NativeGuestOutputRenderContext& context,
-                            nrhi::Cmd* cmd, const FrameScene& scene,
+                            nrhi::Cmd* cmd, const FrameSceneView& scene,
                             const nrhi::Viewport& viewport,
                             const nrhi::Rect& scissor);
 bool ApplySsrPass(const NativeGuestOutputRenderContext& context,
-                  nrhi::Cmd* cmd, const FrameScene& scene,
+                  nrhi::Cmd* cmd, const FrameSceneView& scene,
                   const nrhi::Viewport& viewport, const nrhi::Rect& scissor,
                   bool lin_depth_ready);
 bool EnsureVolumetricPipeline(const NativeGuestOutputRenderContext& context);
 bool ApplyVolumetricPass(const NativeGuestOutputRenderContext& context,
-                         nrhi::Cmd* cmd, const FrameScene& scene,
+                         nrhi::Cmd* cmd, const FrameSceneView& scene,
                          const nrhi::Viewport& viewport,
                          const nrhi::Rect& scissor, bool lin_depth_ready,
                          uint64_t upload_frame);

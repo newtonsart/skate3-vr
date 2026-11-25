@@ -233,7 +233,7 @@ bool OcclusionGridSlotFree(nrhi::Device* device) {
 // failure disables only the grid consumers. Changes viewport, scissor,
 // render target, pipeline and b0.
 void RecordOcclusionGrid(const NativeGuestOutputRenderContext& context,
-                         nrhi::Cmd* cmd, const FrameScene& scene,
+                         nrhi::Cmd* cmd, const FrameSceneView& scene,
                          bool from_ssao) {
   if (!OcclusionGridWanted()) {
     return;
@@ -464,7 +464,7 @@ bool EnsureSsaoPipeline(const NativeGuestOutputRenderContext& context) {
 // drew; binding layout/state was changed and the caller restores the main
 // pass's bindings.
 bool ApplySsaoPass(const NativeGuestOutputRenderContext& context,
-                   nrhi::Cmd* cmd, const FrameScene& scene,
+                   nrhi::Cmd* cmd, const FrameSceneView& scene,
                    const nrhi::Viewport& viewport, const nrhi::Rect& scissor) {
   // The published projection must be the live perspective matrix.
   const float* pr = scene.proj;
@@ -676,7 +676,7 @@ bool ApplySsaoPass(const NativeGuestOutputRenderContext& context,
 // (no SSAO shader compile or AO-raster planes); a creation failure disables
 // only the grid consumers.
 bool ApplyOcclusionGridPass(const NativeGuestOutputRenderContext& context,
-                            nrhi::Cmd* cmd, const FrameScene& scene,
+                            nrhi::Cmd* cmd, const FrameSceneView& scene,
                             const nrhi::Viewport& viewport,
                             const nrhi::Rect& scissor) {
   if (!OcclusionGridWanted()) {
@@ -994,7 +994,7 @@ bool EnsureSsrTargets(const NativeGuestOutputRenderContext& context) {
 // pre-tonemap HDR plane, and blends the result back onto it. Returns true when it drew; the binding layout changed and the
 // caller's post_ran block restores the main-pass bindings.
 bool ApplySsrPass(const NativeGuestOutputRenderContext& context,
-                  nrhi::Cmd* cmd, const FrameScene& scene,
+                  nrhi::Cmd* cmd, const FrameSceneView& scene,
                   const nrhi::Viewport& viewport, const nrhi::Rect& scissor,
                   bool lin_depth_ready) {
   if (!g_r.ssr_gbuf_ready) {
@@ -1319,7 +1319,7 @@ static bool Invert4x4(const float m[16], float out[16]) {
 // Returns true when it staged anything; the binding layout changed and
 // the caller's post_ran block restores the main-pass bindings.
 bool ApplyVolumetricPass(const NativeGuestOutputRenderContext& context,
-                         nrhi::Cmd* cmd, const FrameScene& scene,
+                         nrhi::Cmd* cmd, const FrameSceneView& scene,
                          const nrhi::Viewport& viewport,
                          const nrhi::Rect& scissor, bool lin_depth_ready,
                          uint64_t upload_frame) {

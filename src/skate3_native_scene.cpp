@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -23,6 +24,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -48,6 +50,10 @@
 // backend runtime-compiles the embedded HLSL as before.
 #include "native/shaders/spirv/skate3_native_shaders_spirv.h"
 #include "skate3_native_scene_state.h"
+
+#if SKATE3_HAS_OPENXR
+#include "vr/game_vr.h"
+#endif
 
 #if (defined(REX_HAS_D3D12) && REX_HAS_D3D12) || (defined(REX_HAS_VULKAN) && REX_HAS_VULKAN)
 #include <rex/graphics/native_rhi.h>
@@ -1991,22 +1997,19 @@ namespace {
 // copy; a short string right before an unmapped page falls back to
 // byte-wise guarded reads so it still resolves.
 void GuestTryReadString(uint8_t* base, uint32_t addr, char* out, uint32_t cap) {
-  std::memset(out, 0, cap);
-  if (addr < 0x10000) {
-    return;
-  }
-  if (GuestTryCopy(out, REX_RAW_ADDR(addr), cap - 1)) {
-    const size_t n = strnlen(out, cap - 1);
-    std::memset(out + n, 0, cap - n);
-    return;
-  }
-  for (uint32_t k = 0; k + 1 < cap; ++k) {
-    uint8_t c;
-    if (!GuestTryCopy(&c, REX_RAW_ADDR(addr + k), 1) || c == 0) {
-      break;
+  uint32_t n = 0;
+  if (addr >= 0x10000) {
+    if (GuestTryCopy(out, REX_RAW_ADDR(addr), cap - 1)) {
+      n = static_cast<uint32_t>(strnlen(out, cap - 1));
+    } else {
+      for (; n + 1 < cap; ++n) {
+        uint8_t c;
+        if (!GuestTryCopy(&c, REX_RAW_ADDR(addr + n), 1) || c == 0) break;
+        out[n] = char(c);
+      }
     }
-    out[k] = char(c);
   }
+  std::memset(out + n, 0, cap - n);
 }
 
 // Committed-page check for bulk reads (transient ring memory can be
@@ -3101,38 +3104,27 @@ void CaptureScreenFxState(uint8_t* base) {
   // Their constructors copy metadata after 872/40-byte object headers;
   // the VS path is at +0x394, not inside its mutable fetch table at +0x54.
   // Re-read both typed metadata headers and paths on recycled objects.
-  char paths[2][160] = {};
-  const uint32_t objects[2] = {
-      g_cur_ps_obj.load(std::memory_order_relaxed),
-      g_cur_vs_obj.load(std::memory_order_relaxed)};
-  constexpr uint32_t path_offsets[2] = {
-      kScreenFxVsPathOffset, kScreenFxPsPathOffset};
-  uint32_t types[2] = {}, headers[2] = {};
-  const bool have_headers =
-      GuestTryLoadU32(base, objects[0], &types[0]) &&
-      GuestTryLoadU32(base, objects[0] + kScreenFxVsHeaderOffset, &headers[0]) &&
-      GuestTryLoadU32(base, objects[1], &types[1]) &&
-      GuestTryLoadU32(base, objects[1] + kScreenFxPsHeaderOffset, &headers[1]);
-  for (unsigned i = 0; i < 2; ++i) {
-    if (objects[i] >= 0x10000) {
-      if (!GuestTryCopy(paths[i], base + objects[i] + path_offsets[i],
-                        sizeof(paths[i]) - 1)) {
-        paths[i][0] = '\0';
-      }
-    }
-  }
-  const auto variant = ClassifyScreenFxPixelShader(paths[1]);
-  const auto vertex = ClassifyScreenFxVertexShader(paths[0]);
+  const uint32_t ps_obj = g_cur_vs_obj.load(std::memory_order_relaxed);
+  char path[160];
+  path[sizeof(path) - 1] = '\0';
+  if (ps_obj < 0x10000 ||
+      !GuestTryCopy(path, base + ps_obj + kScreenFxPsPathOffset, sizeof(path) - 1)) return;
+  const auto variant = ClassifyScreenFxPixelShader(path);
   if (variant == ScreenFxVariant::kNone) return;
+
   // A later matching draw with missing state must not inherit a previous
   // draw's bindings or rows, even within this same guest frame.
   g_frame_screen_fx = {};
-  if (!have_headers ||
-      !ScreenFxShaderObjectHeadersValid(types[0], headers[0],
-                                       types[1], headers[1]) ||
-      vertex == ScreenFxVertex::kNone) {
-    return;
-  }
+  const uint32_t vs_obj = g_cur_ps_obj.load(std::memory_order_relaxed);
+  uint32_t vs_type, vs_header, ps_type, ps_header;
+  if (!GuestTryLoadU32(base, vs_obj, &vs_type) ||
+      !GuestTryLoadU32(base, vs_obj + kScreenFxVsHeaderOffset, &vs_header) ||
+      !GuestTryLoadU32(base, ps_obj, &ps_type) ||
+      !GuestTryLoadU32(base, ps_obj + kScreenFxPsHeaderOffset, &ps_header) ||
+      !ScreenFxShaderObjectHeadersValid(vs_type, vs_header, ps_type, ps_header) ||
+      !GuestTryCopy(path, base + vs_obj + kScreenFxVsPathOffset, sizeof(path) - 1)) return;
+  const auto vertex = ClassifyScreenFxVertexShader(path);
+  if (vertex == ScreenFxVertex::kNone) return;
 
   const uint32_t ps = g_ps_bank.load(std::memory_order_relaxed);
   const uint32_t vs = g_vs_bank.load(std::memory_order_relaxed);
@@ -5334,6 +5326,20 @@ void OnDrawDone(uint8_t* base, uint32_t func, uint32_t r4, uint32_t r5, uint32_t
           }
         }
       }
+      // These four material checks use the same two shader paths for this draw.
+      char material_paths[2][120];
+      if (ps_bank != 0 && (!g_water_frame_done || !g_scroll_frame_done ||
+                           !g_ocean_frame_done || !g_oceanrefl_frame_done)) {
+        const uint32_t objects[] = {g_cur_ps_obj.load(std::memory_order_relaxed),
+                                    g_cur_vs_obj.load(std::memory_order_relaxed)};
+        for (size_t i = 0; i < 2; ++i) {
+          const uint32_t addr = GuestReadableApprox(base, objects[i]) ? objects[i] + 0x54 : 0;
+          GuestTryReadString(base, addr, material_paths[i], sizeof(material_paths[i]));
+        }
+      }
+      const auto ps_name_has = [&](const char* needle) {
+        return std::strstr(material_paths[0], needle) || std::strstr(material_paths[1], needle);
+      };
       // flowingwateralpha m_params + animation time (PS c11..c14, c15.x),
       // POSITIVE debug-path gate like the receiver rows: the water bank
       // keeps the whole baseenvironment receiver layout, so only the name
@@ -5341,22 +5347,7 @@ void OnDrawDone(uint8_t* base, uint32_t func, uint32_t r4, uint32_t r5, uint32_t
       // flowingwateralpha draw in a capture carried identical m_params, and
       // the animation time is pass-global anyway.
       if (!g_water_frame_done && ps_bank != 0) {
-        const auto water_ps = [&]() -> bool {
-          const auto check = [&](uint32_t obj) -> bool {
-            if (obj < 0x10000 || !GuestReadableApprox(base, obj)) {
-              return false;
-            }
-            char text[120] = {};
-            for (int k = 0; k < 119; ++k) {
-              text[k] = char(REX_LOAD_U8(obj + 0x54 + k));
-              if (text[k] == '\0') break;
-            }
-            return std::strstr(text, "\\flowingwateralpha") != nullptr;
-          };
-          return check(g_cur_ps_obj.load(std::memory_order_relaxed)) ||
-                 check(g_cur_vs_obj.load(std::memory_order_relaxed));
-        };
-        if (water_ps()) {
+        if (ps_name_has("\\flowingwateralpha")) {
           float rows[17];
           for (int i = 0; i < 16; ++i) {
             rows[i] = LoadGuestF32(base, ps_bank + (44 + i) * 4);  // c11..c14
@@ -5407,22 +5398,7 @@ void OnDrawDone(uint8_t* base, uint32_t func, uint32_t r4, uint32_t r5, uint32_t
       // debug-path gate as the water rows; the bank values alone cannot
       // discriminate this family.
       if (!g_scroll_frame_done && ps_bank != 0) {
-        const auto scroll_ps = [&]() -> bool {
-          const auto check = [&](uint32_t obj) -> bool {
-            if (obj < 0x10000 || !GuestReadableApprox(base, obj)) {
-              return false;
-            }
-            char text[120] = {};
-            for (int k = 0; k < 119; ++k) {
-              text[k] = char(REX_LOAD_U8(obj + 0x54 + k));
-              if (text[k] == '\0') break;
-            }
-            return std::strstr(text, "\\scrollincandescent") != nullptr;
-          };
-          return check(g_cur_ps_obj.load(std::memory_order_relaxed)) ||
-                 check(g_cur_vs_obj.load(std::memory_order_relaxed));
-        };
-        if (scroll_ps()) {
+        if (ps_name_has("\\scrollincandescent")) {
           const float t = LoadGuestF32(base, bank + 36 * 4);        // VS c9.x
           const float mult = LoadGuestF32(base, ps_bank + 13 * 4);  // PS c3.y
           // Range gate: the animation clock is a non-negative seconds
@@ -5445,21 +5421,6 @@ void OnDrawDone(uint8_t* base, uint32_t func, uint32_t r4, uint32_t r5, uint32_t
       // m_params[0..2] at c12..c14) and the oceanreflection sheet row (c3).
       // Same POSITIVE debug-path gating as the water rows.
       if ((!g_ocean_frame_done || !g_oceanrefl_frame_done) && ps_bank != 0) {
-        const auto ps_name_has = [&](const char* needle) -> bool {
-          const auto check = [&](uint32_t obj) -> bool {
-            if (obj < 0x10000 || !GuestReadableApprox(base, obj)) {
-              return false;
-            }
-            char text[120] = {};
-            for (int k = 0; k < 119; ++k) {
-              text[k] = char(REX_LOAD_U8(obj + 0x54 + k));
-              if (text[k] == '\0') break;
-            }
-            return std::strstr(text, needle) != nullptr;
-          };
-          return check(g_cur_ps_obj.load(std::memory_order_relaxed)) ||
-                 check(g_cur_vs_obj.load(std::memory_order_relaxed));
-        };
         if (!g_ocean_frame_done && ps_name_has("\\ocean_default")) {
           float c[64];
           for (int i = 0; i < 64; ++i) {
@@ -9213,30 +9174,40 @@ void BuildFrameScene(uint8_t* base, const SubmitRecord* records, size_t count) {
 
   FrameScene scene;
   scene.items.reserve(count);
-  std::unordered_set<uint32_t> seen;
+  auto* scratch = std::pmr::get_default_resource();
+#if SKATE3_HAS_OPENXR
+  // Reuse the storage for frame-local lookups where dense VR scenes benefit.
+  const bool use_scratch = count >= 1700 && skate3::vr::GameVrEnabled();
+  alignas(std::max_align_t) static thread_local std::array<std::byte, 128 * 1024> scene_scratch;
+  std::pmr::monotonic_buffer_resource frame_memory(scene_scratch.data(), scene_scratch.size());
+  if (use_scratch) {
+    scratch = &frame_memory;
+  }
+#endif
+  std::pmr::unordered_set<uint32_t> seen(scratch);
   // Pre-size the per-frame bookkeeping: these fill with thousands of
   // entries every frame, and growing from empty rehashes repeatedly.
   seen.reserve(count);
   // Dynamic contexts are submitted several times per frame (once per pass);
   // each submission carries that pass's culled island list. Keep the fullest
   // one; a shadow-pass list can be missing body parts the main view needs.
-  std::unordered_map<uint32_t, size_t> dyn_slot;
+  std::pmr::unordered_map<uint32_t, size_t> dyn_slot(scratch);
   // First refused/pending ropa capture per mesh, candidates for the
   // post-merge rescue, which must restore last frame's resolved MODE
   // (rigid vs skinned), never blindly re-skin (see g_ropa_state_cache).
-  std::unordered_map<uint32_t, const DrawItem*> pending_ropa_by_mesh;
+  std::pmr::unordered_map<uint32_t, const DrawItem*> pending_ropa_by_mesh(scratch);
   // Per-INSTANCE skinned candidates (ctx-keyed, character families): a
   // refused capture re-publishes with the instance's own last palette
   // (see g_bones_cache_ctx).
-  std::unordered_map<uint32_t, const DrawItem*> pending_skinned_by_ctx;
+  std::pmr::unordered_map<uint32_t, const DrawItem*> pending_skinned_by_ctx(scratch);
   // Per-instance rigid candidates whose post-draw world fixup never landed
   // this frame; rescued with their cached world (see g_rigid_world_cache).
-  std::unordered_map<uint32_t, const DrawItem*> pending_rigid_by_ctx;
+  std::pmr::unordered_map<uint32_t, const DrawItem*> pending_rigid_by_ctx(scratch);
   // Sort-list records of dynamically-dispatched piece meshes (see
   // g_dyn_dispatch_meshes): built here, published AFTER the record loop with
   // the ctx owner's instance matrix, and only for ctxs no live dynamic
   // capture already covered this frame.
-  std::unordered_map<uint32_t, DrawItem> sortlist_local_by_ctx;
+  std::pmr::unordered_map<uint32_t, DrawItem> sortlist_local_by_ctx(scratch);
   const auto total_indices = [](const DrawItem& d) {
     uint64_t n = 0;
     for (const DrawEntry& e : d.draws) n += e.index_count;
@@ -11238,9 +11209,15 @@ void BuildFrameScene(uint8_t* base, const SubmitRecord* records, size_t count) {
                               std::chrono::steady_clock::now().time_since_epoch())
                               .count(),
                           std::memory_order_relaxed);
-  std::lock_guard<std::mutex> lock(g_scene_mutex);
-  scene.generation = ++g_generation;
-  g_scene = std::make_shared<const FrameScene>(std::move(scene));
+  auto next = std::make_shared<FrameScene>(std::move(scene));
+  std::shared_ptr<const FrameScene> retired;
+  {
+    std::lock_guard<std::mutex> lock(g_scene_mutex);
+    next->generation = ++g_generation;
+    // Free the old scene outside the lock shared with the renderer.
+    retired = std::move(g_scene);
+    g_scene = std::move(next);
+  }
 }
 
 // StartRecording / WriteRecording: native/skate3_native_diagnostics.cpp.

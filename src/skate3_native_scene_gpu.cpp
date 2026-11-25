@@ -458,13 +458,19 @@ constexpr double kTexRouteMaxIdleSeconds = 300.0;
 std::atomic<uint64_t> g_tex_routing_pruned{0};
 
 void PruneTexRouting(uint64_t frame_number) {
+  constexpr uint64_t kSweepParts = 4;
+  constexpr uint64_t kFirstSweepOffset = 20;
+  static uint32_t s_sweep_part = 0;
   static uint64_t s_next_sweep_frame = 0;
   static uint64_t s_next_log_frame = 0;
   static uint64_t s_pruned_since_log = 0;
+  if (!s_next_sweep_frame) {
+    s_next_sweep_frame = frame_number + kFirstSweepOffset;
+  }
   if (frame_number < s_next_sweep_frame) {
     return;
   }
-  s_next_sweep_frame = frame_number + kStoreByteScanIntervalFrames;
+  s_next_sweep_frame = frame_number + kStoreByteScanIntervalFrames / kSweepParts;
   const uint64_t hold_floor = 8 * uint64_t(std::max(
       20, REXCVAR_GET(skate3_native_render_scene_detail_hold)));
   const uint64_t min_idle = std::max<uint64_t>(
@@ -482,18 +488,30 @@ void PruneTexRouting(uint64_t frame_number) {
     return it == g_r.tex_store.end() || !it->second.valid;
   };
   size_t pruned = 0;
-  pruned += std::erase_if(g_r.tex_routes, [&](const auto& kv) {
-    return stale(kv.second.last_used_frame, kv.second.key);
-  });
-  pruned += std::erase_if(g_r.tex_sticky, [&](const auto& kv) {
-    return stale(kv.second.last_used_frame, kv.second.words_key);
-  });
-  pruned += std::erase_if(g_r.words_sticky, [&](const auto& kv) {
-    return stale(kv.second.last_used_frame, kv.second.words_key);
-  });
-  pruned += std::erase_if(g_r.tex_pending_first, [&](const auto& kv) {
-    return kv.second.last_used_frame + min_idle < frame_number;
-  });
+  // Give each routing table its own render call while keeping the sweep cadence.
+  switch (s_sweep_part) {
+    case 0:
+      pruned = std::erase_if(g_r.tex_routes, [&](const auto& kv) {
+        return stale(kv.second.last_used_frame, kv.second.key);
+      });
+      break;
+    case 1:
+      pruned = std::erase_if(g_r.tex_sticky, [&](const auto& kv) {
+        return stale(kv.second.last_used_frame, kv.second.words_key);
+      });
+      break;
+    case 2:
+      pruned = std::erase_if(g_r.words_sticky, [&](const auto& kv) {
+        return stale(kv.second.last_used_frame, kv.second.words_key);
+      });
+      break;
+    case 3:
+      pruned = std::erase_if(g_r.tex_pending_first, [&](const auto& kv) {
+        return kv.second.last_used_frame + min_idle < frame_number;
+      });
+      break;
+  }
+  s_sweep_part = (s_sweep_part + 1) % kSweepParts;
   s_pruned_since_log += pruned;
   g_tex_routing_pruned.fetch_add(pruned, std::memory_order_relaxed);
   // Once a minute at most, and only when something was pruned: the map
@@ -532,7 +550,9 @@ void EvictMeshStore(uint64_t frame_number) {
   static uint64_t s_evicted_run = 0;
   static uint64_t s_next_bytes_frame = 0;
   if (frame_number >= s_next_bytes_frame) {
-    s_next_bytes_frame = frame_number + kStoreByteScanIntervalFrames;
+    // Offset mesh accounting from the texture-store and routing sweeps.
+    s_next_bytes_frame = frame_number + kStoreByteScanIntervalFrames +
+        (s_next_bytes_frame == 0 ? kStoreByteScanIntervalFrames / 2 : 0);
     uint64_t total = 0;
     for (const auto& [k, m] : g_r.meshes) {
       total += uint64_t(m.vb_view.size_bytes) + m.ib_view.size_bytes;
@@ -7167,7 +7187,7 @@ static nrhi::TextureView* LookupResolvedTexture(uint32_t tex_ptr,
 // camera, with the origin snapped to the texel grid so the static raster
 // never swims sub-texel (foliage shimmer).
 static void RenderStaticSunMap(const NativeGuestOutputRenderContext& context,
-                               const FrameScene& scene, uint32_t bone_region,
+                               const FrameSceneView& scene, uint32_t bone_region,
                                int32_t debug_mode, uint64_t frame_number) {
   g_r.static_sun_valid = false;
   if (g_r.static_sun == nullptr || g_r.pso_shadow_caster == nullptr ||
@@ -7541,7 +7561,7 @@ static void RenderStaticSunMap(const NativeGuestOutputRenderContext& context,
 }
 
 bool RenderShadowAtlas(const NativeGuestOutputRenderContext& context,
-                       const FrameScene& scene, uint32_t bone_region,
+                       const FrameSceneView& scene, uint32_t bone_region,
                        int32_t debug_mode, uint64_t frame_number,
                        uint32_t* out_draws) {
   nrhi::Cmd* cmd = context.cmd;
@@ -8016,7 +8036,7 @@ bool RenderShadowAtlas(const NativeGuestOutputRenderContext& context,
   // still bound. The edge composite runs after the resolve, on the
   // single-sample output.
 bool RenderOutlineMask(const NativeGuestOutputRenderContext& context,
-                       const FrameScene& scene, const nrhi::Viewport& viewport,
+                       const FrameSceneView& scene, const nrhi::Viewport& viewport,
                        const nrhi::Rect& scissor, bool msaa_on,
                        nrhi::Texture* scene_color, nrhi::Texture* scene_depth,
                        bool use_depth) {
@@ -8106,7 +8126,7 @@ bool RenderOutlineMask(const NativeGuestOutputRenderContext& context,
 // Selection-outline composite: additive stencil-edge-detect over the
 // resolved output (before the popup blur, like the game's postfx order).
 void RenderOutlineComposite(const NativeGuestOutputRenderContext& context,
-                            const FrameScene& scene, nrhi::Texture* output,
+                            const FrameSceneView& scene, nrhi::Texture* output,
                             const nrhi::Viewport& viewport,
                             const nrhi::Rect& scissor) {
   nrhi::Cmd* cmd = context.cmd;
@@ -8126,7 +8146,7 @@ void RenderOutlineComposite(const NativeGuestOutputRenderContext& context,
 
 // Windowed perf + telemetry log lines (verbatim from the former tail of
 // RenderScene). Window length in frames = the perf-interval cvar.
-void LogFrameStats(const FrameScene& scene, uint64_t frames, uint32_t drawn,
+void LogFrameStats(const FrameSceneView& scene, uint64_t frames, uint32_t drawn,
                    uint32_t drawn_2d, uint32_t drawn_spline, bool shadow_ready,
                    uint32_t shadow_draws) {
   // Raw guest-load read-fault recoveries (POSIX only; always 0 on Windows).
@@ -8802,29 +8822,29 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
     }
     scene_ptr = g_scene;
   }
-  FrameScene eye_scene;
 #if SKATE3_HAS_OPENXR
-  if (user_data && loading_native)
-    static_cast<skate3::vr::EyeCamera*>(user_data)->override_camera = false;
-  if (auto* eye = static_cast<skate3::vr::EyeCamera*>(user_data);
-      eye && eye->override_camera && !loading_native) {
-    const auto copy_start=PerfClock::now();
-    FrameScene* camera_scene=eye->render_scene.get();
-    if (!camera_scene) {
-      eye_scene = *eye->scene;
-      camera_scene=&eye_scene;
-    }
-    eye->scene_copy_ms=std::chrono::duration<double,std::milli>(PerfClock::now()-copy_start).count();
-    std::memcpy(camera_scene->view_proj, eye->view_proj, sizeof(camera_scene->view_proj));
-    std::memcpy(camera_scene->proj, eye->proj, sizeof(camera_scene->proj));
-    std::memcpy(camera_scene->cam_pos, eye->position, sizeof(camera_scene->cam_pos));
-    if (rex::cvar::Query<int32_t>("skate3_vr_edit_mode")!=0)
-      camera_scene->ui_blur=0;
-    scene_ptr = eye->render_scene ? eye->render_scene :
-        std::shared_ptr<const FrameScene>(&eye_scene, [](const FrameScene*) {});
+  auto* vr_eye = static_cast<skate3::vr::EyeCamera*>(user_data);
+  const auto copy_start = PerfClock::now();
+  if (vr_eye && loading_native) {
+    vr_eye->override_camera = false;
+  }
+  if (vr_eye && vr_eye->override_camera) {
+    scene_ptr = vr_eye->scene;
   }
 #endif
-  const FrameScene& scene = *scene_ptr;
+  FrameSceneView scene(*scene_ptr);
+#if SKATE3_HAS_OPENXR
+  if (vr_eye && vr_eye->override_camera) {
+    std::memcpy(scene.view_proj, vr_eye->view_proj, sizeof(scene.view_proj));
+    std::memcpy(scene.proj, vr_eye->proj, sizeof(scene.proj));
+    std::memcpy(scene.cam_pos, vr_eye->position, sizeof(scene.cam_pos));
+    if (rex::cvar::Query<int32_t>("skate3_vr_edit_mode") != 0) {
+      scene.ui_blur = 0;
+    }
+    vr_eye->scene_copy_ms =
+        std::chrono::duration<double, std::milli>(PerfClock::now() - copy_start).count();
+  }
+#endif
 
   if (!EnsurePipeline(context)) {
     return false;
@@ -9071,21 +9091,20 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   const float* sh = scene.shadow_rows;
   const int32_t debug_mode = REXCVAR_GET(skate3_native_render_scene_debug);
   bool reuse_shadows=false;
-  const FrameScene* shadow_scene=&scene;
+  FrameSceneView shadow_scene = scene;
 #if SKATE3_HAS_OPENXR
-  auto* vr_eye=static_cast<skate3::vr::EyeCamera*>(user_data);
   if (vr_eye && vr_eye->override_camera && vr_eye->shadows) {
-    shadow_scene=vr_eye->scene.get();
     reuse_shadows=second_vr_eye && vr_eye->shadows->built;
     if (reuse_shadows) shadow_ready=vr_eye->shadows->ready;
+    else shadow_scene = FrameSceneView(*vr_eye->scene);
   }
 #endif
   if (!reuse_shadows) {
     cmd->ProfileRegion(nrhi::ProfileStage::kShadow);
     shadow_ready =
-        RenderShadowAtlas(context, *shadow_scene, bone_region, debug_mode, frame_number, &shadow_draws);
+        RenderShadowAtlas(context, shadow_scene, bone_region, debug_mode, frame_number, &shadow_draws);
     cmd->ProfileRegion(nrhi::ProfileStage::kStaticSun);
-    RenderStaticSunMap(context, *shadow_scene, bone_region, debug_mode, frame_number);
+    RenderStaticSunMap(context, shadow_scene, bone_region, debug_mode, frame_number);
 #if SKATE3_HAS_OPENXR
     if (vr_eye && vr_eye->override_camera && vr_eye->shadows)
       *vr_eye->shadows={true,shadow_ready};
@@ -9559,8 +9578,8 @@ bool RenderScene(const NativeGuestOutputRenderContext& context, void* user_data)
   CharacterFadeUniformCache fade_uniforms;
   std::unordered_map<const DrawItem*, VbBinding> fade_ropa_bindings;
 #if SKATE3_HAS_OPENXR
-  const bool share_preparation = vr_eye && vr_eye->override_camera && vr_eye->share_preparation &&
-      vr_eye->render_scene.get() == &scene;
+  const bool share_preparation =
+      vr_eye && vr_eye->override_camera && vr_eye->share_preparation;
   if (share_preparation) g_r.stereo_meshes.resize(scene.items.size());
 #endif
   const auto rigid_item = [](const DrawItem& item) {
