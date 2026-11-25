@@ -23,6 +23,9 @@ game-camera yaw, and the maximum CPU render, transfer/wait and GPU render
 times, plus the maximum time spent polling XR events and beginning a frame.
 Immersive gameplay overlaps the next OpenXR frame wait with game work.
 Set `SKATE3_VR_PREFETCH_FRAME=0` before starting the launcher to test serial waits.
+Set `SKATE3_VR_PRECISE_VBLANK=1` to try a high-resolution guest VBlank timer in
+immersive VR on Windows with VSync disabled. The timer keeps the configured
+guest cadence and falls back to the standard wait if Windows cannot use it.
 `VR trace worst interval:` records the scene, camera yaw change and timings for
 the submission with the largest interval in that window. The interval spans
 two submissions and is not necessarily caused by work in the latter frame.

@@ -780,6 +780,48 @@ nrhi::Texture* NativeRhiTryStreamTexture(nrhi::Device* device, const nrhi::Textu
   if (reuse_only) flags |= VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT;
   return static_cast<NrDeviceVulkan*>(device)->CreateTexture(desc, flags);
 }""")
+    graphics = "src/graphics/graphics_system.cpp"
+    edit(graphics, "#include <rex/ui/windowed_app_context.h>",
+         """#include <rex/ui/windowed_app_context.h>
+
+#if REX_PLATFORM_WIN32
+#include <windows.h>
+#endif""")
+    edit(graphics, "REXCVAR_DEFINE_BOOL(vblank_host_clock_pacing,",
+         """REXCVAR_DEFINE_BOOL(vblank_no_vsync_precise_wait, false, "GPU",
+                    "Use a high-resolution Windows timer for guest vblank with VSync disabled")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
+REXCVAR_DEFINE_BOOL(vblank_host_clock_pacing,""")
+    edit(graphics, "void PreciseWaitUntilHostTick(",
+         """#if REX_PLATFORM_WIN32
+bool WaitForGuestVblank(uint64_t remaining, uint64_t frequency) {
+  static thread_local std::unique_ptr<void, decltype(&CloseHandle)> timer(
+      CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                             TIMER_MODIFY_STATE | SYNCHRONIZE), CloseHandle);
+  if (!timer) return false;
+  LARGE_INTEGER due{};
+  due.QuadPart = -int64_t(std::clamp(remaining * 10'000'000 / frequency,
+                                   uint64_t{1}, uint64_t{50'000}));
+  return SetWaitableTimer(timer.get(), &due, 0, nullptr, nullptr, FALSE) &&
+         WaitForSingleObject(timer.get(), 10) == WAIT_OBJECT_0;
+}
+#endif
+
+void PreciseWaitUntilHostTick(""")
+    edit(graphics, """          if (!vsync_enabled) {
+            rex::thread::Sleep(std::chrono::milliseconds(1));
+          } else if (next_frame_time > current_time) {""",
+         """          if (!vsync_enabled) {
+#if REX_PLATFORM_WIN32
+            if (REXCVAR_GET(vblank_no_vsync_precise_wait) &&
+                (next_frame_time <= current_time ||
+                 WaitForGuestVblank(next_frame_time - current_time, guest_tick_frequency))) {
+              continue;
+            }
+#endif
+            rex::thread::Sleep(std::chrono::milliseconds(1));
+          } else if (next_frame_time > current_time) {""")
 
 
 if __name__ == "__main__":

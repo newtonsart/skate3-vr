@@ -75,12 +75,15 @@ try {
         Assert ($options.ArgumentList -contains ('--user_data_root="{0}\out\runtime-test"' -f $fixture)) 'User profile changed'
     }
     $savedPrefetch = $env:SKATE3_VR_PREFETCH_FRAME
+    $savedPreciseVblank = $env:SKATE3_VR_PRECISE_VBLANK
     try {
         $env:SKATE3_VR_PREFETCH_FRAME = $null
+        $env:SKATE3_VR_PRECISE_VBLANK = $null
         foreach ($mode in 0..2) {
             $options = Get-VrLaunchOptions -Root $fixture -Mode $mode
             Assert (($options.ArgumentList -contains '--skate3_vr_prefetch_frame=true') -eq ($mode -eq 0)) 'XR prefetch must default on only in immersive mode'
             Assert (($options.ArgumentList -contains '--vulkan_sparse_shared_memory=false') -eq ($mode -eq 0)) 'Preallocate Vulkan guest memory only in immersive mode'
+            Assert ($options.ArgumentList -notcontains '--vblank_no_vsync_precise_wait=true') 'Precise VBlank must be opt-in'
         }
         $options = Get-VrLaunchOptions -Root $fixture -Setup
         Assert ($options.ArgumentList -notcontains '--skate3_vr_prefetch_frame=true') 'Setup must skip XR prefetch'
@@ -88,7 +91,15 @@ try {
         $env:SKATE3_VR_PREFETCH_FRAME = '0'
         $options = Get-VrLaunchOptions -Root $fixture -Mode 0
         Assert ($options.ArgumentList -contains '--skate3_vr_prefetch_frame=false') 'XR prefetch opt-out was ignored'
-    } finally { $env:SKATE3_VR_PREFETCH_FRAME = $savedPrefetch }
+        $env:SKATE3_VR_PRECISE_VBLANK = '1'
+        foreach ($mode in 0..2) {
+            $options = Get-VrLaunchOptions -Root $fixture -Mode $mode
+            Assert (($options.ArgumentList -contains '--vblank_no_vsync_precise_wait=true') -eq ($mode -eq 0)) 'Precise VBlank must be immersive only'
+        }
+    } finally {
+        $env:SKATE3_VR_PREFETCH_FRAME = $savedPrefetch
+        $env:SKATE3_VR_PRECISE_VBLANK = $savedPreciseVblank
+    }
     Assert (-not (Test-Path -LiteralPath (Join-Path $fixture 'out\runtime-test'))) 'Launcher modified user data'
     foreach ($mode in 0..2) {
         $form = New-VrLauncherForm -Root $fixture

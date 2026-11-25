@@ -19,7 +19,8 @@ FILES = ["include/rex/ui/vulkan/instance.h", "src/ui/vulkan/vulkan_instance.cpp"
          "include/rex/ui/overlay/install_wizard_overlay.h",
          "src/ui/overlay/install_wizard_overlay.cpp", "thirdparty/CMakeLists.txt",
          "src/ui/rex_app.cpp", "src/core/cvar.cpp", "src/audio/xma_context.cpp",
-         "include/rex/ui/vulkan/mem_alloc.h", "src/ui/vulkan/vulkan_mem_alloc.cpp"]
+         "include/rex/ui/vulkan/mem_alloc.h", "src/ui/vulkan/vulkan_mem_alloc.cpp",
+         "src/graphics/graphics_system.cpp"]
 
 
 class InteropTests(unittest.TestCase):
@@ -132,6 +133,9 @@ int main() {
             apply(sdk)
             self.assertEqual(first, [(sdk / name).read_bytes() for name in FILES])
             self.assertIn("FlushNativeForExternal", (sdk / FILES[4]).read_text())
+            graphics = (sdk / "src/graphics/graphics_system.cpp").read_text()
+            self.assertIn("CREATE_WAITABLE_TIMER_HIGH_RESOLUTION", graphics)
+            self.assertIn("if (REXCVAR_GET(vblank_no_vsync_precise_wait)", graphics)
             self.assertIn("hooks.create_instance", (sdk / FILES[1]).read_text())
             self.assertIn("user_dir = rex::to_path(user_data_cvar)", (sdk / "src/ui/rex_app.cpp").read_text())
             self.assertIn("leaving it unchanged", (sdk / "src/core/cvar.cpp").read_text())

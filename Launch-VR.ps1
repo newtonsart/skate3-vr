@@ -134,6 +134,9 @@ function Get-VrLaunchOptions {
         $arguments += "--skate3_vr_prefetch_frame=$prefetch"
         # Allocate the guest buffer during startup to avoid sparse binds during play.
         $arguments += '--vulkan_sparse_shared_memory=false'
+        if ($env:SKATE3_VR_PRECISE_VBLANK -eq '1') {
+            $arguments += '--vblank_no_vsync_precise_wait=true'
+        }
     }
     return @{ FilePath = $installation.Executable; WorkingDirectory = $installation.Root; ArgumentList = $arguments }
 }
