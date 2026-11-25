@@ -1907,18 +1907,6 @@ bool GuestTryLoadU32(uint8_t* base, uint32_t addr, uint32_t* out) {
   return true;
 }
 
-bool GuestTryLoadU64(uint8_t* base, uint32_t addr, uint64_t* out) {
-  if (addr < 0x10000) {
-    return false;
-  }
-  uint64_t raw;
-  if (!GuestTryCopy(&raw, REX_RAW_ADDR(addr), 8)) {
-    return false;
-  }
-  *out = __builtin_bswap64(raw);
-  return true;
-}
-
 // Hot-path guarded reads that failed (KI-64): the capture walk, the item
 // cache-hit check and the render hooks skip the item or hook action instead
 // of faulting the guest render thread (GuestReadRecoveryScope is a no-op on
@@ -2053,18 +2041,10 @@ bool ComputeItemFingerprint(uint8_t* base, DrawItem& item) {
   mix(item.ib_addr);
   mix(item.vb_bytes);
   mix(item.ib_count);
-  if (item.vb_bytes >= 8 && item.ib_count >= 4) {
-    for (uint32_t k = 0; k < 16; ++k) {
-      uint64_t vq = 0, iq = 0;
-      const uint32_t vb_off = uint32_t(uint64_t(item.vb_bytes - 8) * k / 15u) & ~7u;
-      const uint32_t ib_off = uint32_t(uint64_t(item.ib_count * 2 - 8) * k / 15u) & ~7u;
-      if (!GuestTryLoadU64(base, item.vb_addr + vb_off, &vq) ||
-          !GuestTryLoadU64(base, item.ib_addr + ib_off, &iq)) {
-        return false;
-      }
-      mix(vq);
-      mix(iq);
-    }
+  if (item.vb_bytes >= 8 && item.ib_count >= 4 &&
+      !TryFingerprintGuestSamples(base, item.vb_addr, item.ib_addr, item.vb_bytes,
+                                  item.ib_count, &h)) {
+    return false;
   }
   item.fingerprint = h;
   return true;

@@ -30,10 +30,14 @@ struct SkinSampleVert {
 
 // SEH-guarded bulk copy of guest memory (host pointers; callers pass
 // base + guest_addr). Returns false when the range faults (streaming
-// decommit, bogus candidate pointer). ANY guarded guest read must go
-// through this function; see the compiler-trap comment at the definition:
+// decommit, bogus candidate pointer). See the compiler-trap comment at the definition:
 // open-coded __try{memcpy}__except compiles to an UNPROTECTED `jmp memcpy`.
 bool GuestTryCopy(void* dst, const void* src, size_t size);
+
+// Hash sixteen samples per buffer, committing only if all reads succeed.
+// The caller provides at least eight vertex bytes and four 16-bit indices.
+bool TryFingerprintGuestSamples(uint8_t* base, uint32_t vb_addr, uint32_t ib_addr,
+                                uint32_t vb_bytes, uint32_t ib_count, uint64_t* hash);
 
 // Allocation-metadata check for speculative prewarm reads, not a replacement
 // for GuestTryCopy: streaming can still revoke the range after this check.

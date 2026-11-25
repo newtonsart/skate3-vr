@@ -58,8 +58,7 @@ bool GuestMetadataReadable(uint32_t addr, uint32_t size) {
 //    personality (__CxxFrameHandler3), the __except scope is dropped in the
 //    merge, hence the noinline.
 // This means plain `__try { std::memcpy(...) } __except` NEVER protected
-// anything in optimized builds; any future guarded read must go through
-// this function.
+// anything in optimized builds. Specialized readers use the same guarded dispatch.
 namespace {
 typedef void* (*GuestMemcpyFn)(void*, const void*, size_t);
 volatile GuestMemcpyFn g_guest_memcpy_fn = std::memcpy;
@@ -229,6 +228,58 @@ void ArmGuestReadRecoveryForThread(uint8_t* base) {
 
 uint64_t GuestReadRecoveryCount() {
   return g_read_recoveries.load(std::memory_order_relaxed);
+}
+#endif
+
+namespace {
+bool FingerprintGuestSamples(uint8_t* base, uint32_t vb_addr, uint32_t ib_addr,
+                             uint32_t vb_bytes, uint32_t ib_count, uint64_t* value) {
+  uint64_t h = *value;
+  for (uint32_t k = 0; k < 16; ++k) {
+    const uint32_t vaddr = vb_addr + (uint32_t(uint64_t(vb_bytes - 8) * k / 15u) & ~7u);
+    const uint32_t iaddr = ib_addr + (uint32_t(uint64_t(ib_count * 2 - 8) * k / 15u) & ~7u);
+    if (vaddr < 0x10000 || iaddr < 0x10000) return false;
+    uint64_t vertex, index;
+#if defined(_WIN32)
+    // The entire sample loop is called under the SEH guard below.
+    std::memcpy(&vertex, REX_RAW_ADDR(vaddr), sizeof(vertex));
+    std::memcpy(&index, REX_RAW_ADDR(iaddr), sizeof(index));
+#else
+    if (!GuestTryCopy(&vertex, REX_RAW_ADDR(vaddr), sizeof(vertex)) ||
+        !GuestTryCopy(&index, REX_RAW_ADDR(iaddr), sizeof(index))) {
+      return false;
+    }
+#endif
+    h = (h ^ __builtin_bswap64(vertex)) * 1099511628211ull;
+    h = (h ^ __builtin_bswap64(index)) * 1099511628211ull;
+  }
+  *value = h;
+  return true;
+}
+
+#if defined(_WIN32)
+// The volatile dispatch and noinline keep the SEH scope visible to Clang.
+decltype(&FingerprintGuestSamples) volatile g_fingerprint_samples = FingerprintGuestSamples;
+#endif
+}  // namespace
+
+#if defined(_WIN32)
+__declspec(noinline) bool TryFingerprintGuestSamples(
+    uint8_t* base, uint32_t vb_addr, uint32_t ib_addr, uint32_t vb_bytes, uint32_t ib_count,
+    uint64_t* hash) {
+  __try {
+    return g_fingerprint_samples(base, vb_addr, ib_addr, vb_bytes, ib_count, hash);
+  } __except ((GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ||
+               GetExceptionCode() == EXCEPTION_IN_PAGE_ERROR)
+                  ? EXCEPTION_EXECUTE_HANDLER
+                  : EXCEPTION_CONTINUE_SEARCH) {  // NOLINT
+    return false;
+  }
+}
+#else
+bool TryFingerprintGuestSamples(uint8_t* base, uint32_t vb_addr, uint32_t ib_addr,
+                                uint32_t vb_bytes, uint32_t ib_count, uint64_t* hash) {
+  return FingerprintGuestSamples(base, vb_addr, ib_addr, vb_bytes, ib_count, hash);
 }
 #endif
 
