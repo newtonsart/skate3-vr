@@ -69,20 +69,25 @@ try {
         Assert ($options.ArgumentList -contains '--skate3_vr=true') 'VR not enabled'
         Assert ($options.ArgumentList -contains '--gpu_backend=vulkan') 'Vulkan not selected'
         Assert ($options.ArgumentList -contains '--skate3_vr_perf_trace=true') 'VR timing trace not enabled'
-        Assert ($options.ArgumentList -contains '--skate3_vr_gpu_timing=true') 'GPU timing not enabled'
-        Assert ($options.ArgumentList -contains '--skate3_native_render_scene_perf_log=true') 'Native timing not enabled'
+        Assert ($options.ArgumentList -notcontains '--skate3_vr_gpu_timing=true') 'Regular play must skip GPU timing queries'
+        Assert ($options.ArgumentList -notcontains '--skate3_native_render_scene_perf_log=true') 'Regular play must skip native render profiling'
         Assert ($options.ArgumentList -contains ('--game_data_root="{0}\game"' -f $fixture)) 'Game path lost its quotes'
         Assert ($options.ArgumentList -contains ('--user_data_root="{0}\out\runtime-test"' -f $fixture)) 'User profile changed'
     }
     $savedPrefetch = $env:SKATE3_VR_PREFETCH_FRAME
     try {
-        $env:SKATE3_VR_PREFETCH_FRAME = '1'
+        $env:SKATE3_VR_PREFETCH_FRAME = $null
         foreach ($mode in 0..2) {
             $options = Get-VrLaunchOptions -Root $fixture -Mode $mode
-            Assert (($options.ArgumentList -contains '--skate3_vr_prefetch_frame=true') -eq ($mode -eq 0)) 'XR prefetch must be immersive only'
+            Assert (($options.ArgumentList -contains '--skate3_vr_prefetch_frame=true') -eq ($mode -eq 0)) 'XR prefetch must default on only in immersive mode'
+            Assert (($options.ArgumentList -contains '--vulkan_sparse_shared_memory=false') -eq ($mode -eq 0)) 'Preallocate Vulkan guest memory only in immersive mode'
         }
         $options = Get-VrLaunchOptions -Root $fixture -Setup
         Assert ($options.ArgumentList -notcontains '--skate3_vr_prefetch_frame=true') 'Setup must skip XR prefetch'
+        Assert ($options.ArgumentList -notcontains '--vulkan_sparse_shared_memory=false') 'Setup must keep the default Vulkan memory policy'
+        $env:SKATE3_VR_PREFETCH_FRAME = '0'
+        $options = Get-VrLaunchOptions -Root $fixture -Mode 0
+        Assert ($options.ArgumentList -contains '--skate3_vr_prefetch_frame=false') 'XR prefetch opt-out was ignored'
     } finally { $env:SKATE3_VR_PREFETCH_FRAME = $savedPrefetch }
     Assert (-not (Test-Path -LiteralPath (Join-Path $fixture 'out\runtime-test'))) 'Launcher modified user data'
     foreach ($mode in 0..2) {

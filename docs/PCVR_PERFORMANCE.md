@@ -21,12 +21,14 @@ frames: the OpenXR display period, mean and maximum CPU submission interval,
 intervals over 1.5 times that period, repeated scene generations, cumulative
 game-camera yaw, and the maximum CPU render, transfer/wait and GPU render
 times, plus the maximum time spent polling XR events and beginning a frame.
-`native-scene perf:` provides the game-thread and resource-work breakdown.
+Immersive gameplay overlaps the next OpenXR frame wait with game work.
+Set `SKATE3_VR_PREFETCH_FRAME=0` before starting the launcher to test serial waits.
 `VR trace worst interval:` records the scene, camera yaw change and timings for
 the submission with the largest interval in that window. The interval spans
 two submissions and is not necessarily caused by work in the latter frame.
-The trace includes
-timing queries but adds no new GPU completion waits; it may still add overhead.
+For a diagnostic run, `--skate3_native_render_scene_perf_log=true` enables the
+game-thread and resource-work breakdown. `--skate3_vr_gpu_timing=true` enables
+GPU timestamp queries, which can add overhead.
 
 Submission intervals do not measure displayed frames, reprojection or headset
 latency. GPU timing may be unavailable, indicated by `GPU-samples=0` and a
