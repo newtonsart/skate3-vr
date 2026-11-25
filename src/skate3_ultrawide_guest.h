@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #if SKATE3_HAS_OPENXR
-#include <mutex>
+#include <atomic>
 #include "vr/cull_frustum.h"
 #include <rex/kernel/guest_presence.h>
 #include <rex/logging.h>
@@ -18,10 +18,9 @@
 // Guest-side ultrawide support: the native renderer draws true widescreen
 // frames (wide guest output + Hor+ projection), but the game's own CPU
 // culling still tests against its 16:9 view frustum and would drop side
-// content before it ever reaches the renderer. The frustum patch scope below
-// is injected into the recompiled cull routine (see
-// cmake/ApplySkate3CodegenPatches.cmake) and widens the cull planes in guest
-// memory to match the wide view.
+// content before it ever reaches the renderer. The generated cull routine
+// uses this helper to widen the desktop planes or load the VR expansion
+// directly into its local vector registers.
 
 inline bool Skate3UltrawideHasExpandedTargetAspect() {
   if (!rex::cvar::Query<bool>("skate3_ultrawide") ||
@@ -45,8 +44,8 @@ inline bool Skate3UltrawideShouldWidenGameCullFrustum(u8* base, uint32_t cull_bl
          rex::cvar::Query<bool>("skate3_ultrawide_widen_game_frustum");
 }
 
-struct Skate3UltrawideGameFrustumPatchScope {
-  Skate3UltrawideGameFrustumPatchScope(PPCContext& ctx_, u8* base_, uint32_t cull_block)
+struct Skate3GuestCullPlanes {
+  Skate3GuestCullPlanes(PPCContext& ctx_, u8* base_, uint32_t cull_block)
       : ctx(ctx_), base(base_) {
 #if SKATE3_HAS_OPENXR
     if ((rex::cvar::Query<bool>("skate3_vr") ||
@@ -56,25 +55,20 @@ struct Skate3UltrawideGameFrustumPatchScope {
         rex::kernel::guest_presence::GameplayContextValue() == 1 &&
         cull_block >= 0x10000 && cull_block < 0xFFFFD000) {
       float camera[3];
-      if (!skate3::vr::GetGameCullCamera(camera)) return;
-      static std::mutex vr_cull_mutex;
-      vr_lock = std::unique_lock<std::mutex>(vr_cull_mutex);
+      if ((cull_block & 15) || !skate3::vr::GetGameCullCamera(camera)) return;
       block = cull_block;
-      std::array<float,24> original,expanded;
+      std::array<float, 24> original;
       for (uint32_t p=0;p<6;++p) {
         const auto plane=LoadPlane(5152+p*16);
         std::copy(plane.begin(),plane.end(),original.begin()+p*4);
       }
-      if (!skate3::vr::ExpandMainCullFrustum(original,camera,200.0f,expanded)) return;
-      for (uint32_t p=0;p<6;++p) {
-        vr_original_d[p]=REX_LOAD_U32(block+5164+p*16);
-        StoreFloat(block+5164+p*16,expanded[p*4+3]);
-      }
-      vr_active=true;
-      static uint64_t applied=0;
-      if (++applied<=4)
+      vr_active = skate3::vr::ExpandMainCullFrustum(original, camera, 200.0f, vr_planes);
+      static std::atomic<unsigned> applied{0};
+      if (vr_active && applied.load(std::memory_order_relaxed) < 4 &&
+          applied.fetch_add(1, std::memory_order_relaxed) < 4) {
         REXLOG_INFO("VR: expanded matched main cull block {:08X} camera=({:.2f},{:.2f},{:.2f}) plane0.d={:.2f}->{:.2f}",
-                    block,camera[0],camera[1],camera[2],original[3],expanded[3]);
+                    block, camera[0], camera[1], camera[2], original[3], vr_planes[3]);
+      }
       return;
     }
 #endif
@@ -123,19 +117,14 @@ struct Skate3UltrawideGameFrustumPatchScope {
     cache.widened[1] = LoadPlaneBits(kRightPlaneOffset);
     cache.side_scale = side_scale;
     cache.valid = true;
-    active = true;
   }
 
-  ~Skate3UltrawideGameFrustumPatchScope() {
+  float VrPlaneDistance(size_t plane, float original) const {
 #if SKATE3_HAS_OPENXR
-    if (vr_active) for (uint32_t p=0;p<6;++p)
-      REX_STORE_U32(block+5164+p*16,vr_original_d[p]);
+    if (vr_active) return vr_planes[plane * 4 + 3];
 #endif
+    return original;
   }
-
-  Skate3UltrawideGameFrustumPatchScope(const Skate3UltrawideGameFrustumPatchScope&) = delete;
-  Skate3UltrawideGameFrustumPatchScope& operator=(const Skate3UltrawideGameFrustumPatchScope&) =
-      delete;
 
  private:
   using Plane = std::array<float, 4>;
@@ -225,10 +214,9 @@ struct Skate3UltrawideGameFrustumPatchScope {
   PPCContext& ctx;
   u8* base = nullptr;
   float side_scale = 1.0f;
-  bool active = false;
 #if SKATE3_HAS_OPENXR
-  std::unique_lock<std::mutex> vr_lock;
-  std::array<uint32_t,6> vr_original_d{};
-  bool vr_active=false;
+  // Keep the expansion local to this job. Other jobs can read the same guest planes.
+  std::array<float, 24> vr_planes;
+  bool vr_active = false;
 #endif
 };

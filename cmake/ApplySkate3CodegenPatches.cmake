@@ -25,38 +25,57 @@ endfunction()
 set(_frustum_patched FALSE)
 foreach(_file IN LISTS _skate3_recomp_files)
   file(READ "${_file}" _contents)
+  # Migrate previously generated sources with the frustum patch at the caller.
+  set(_legacy_scope "\tSkate3UltrawideGameFrustumPatchScope skate3_ultrawide_game_frustum_patch_scope(\n\t\tctx, base, ctx.r4.u32);\n")
   if(_contents MATCHES "Skate3UltrawideGameFrustumPatchScope")
-    set(_frustum_patched TRUE)
-    break()
+    string(FIND "${_contents}" "${_legacy_scope}" _legacy_at)
+    if(_legacy_at EQUAL -1)
+      message(FATAL_ERROR "Unexpected legacy frustum patch in ${_file}")
+    endif()
+    string(REPLACE "${_legacy_scope}" "" _contents "${_contents}")
+    string(REPLACE "#include \"skate3_ultrawide_guest.h\"\n" "" _contents "${_contents}")
+    file(WRITE "${_file}" "${_contents}")
   endif()
-  string(FIND "${_contents}" "ctx.r6.u64 = REX_LOAD_U32(ctx.r4.u32 + 5260);" _frustum_anchor)
-  if(_frustum_anchor EQUAL -1)
+
+  set(_frustum_entry "DEFINE_REX_FUNC(sub_82816A40) {\n\tREX_FUNC_PROLOGUE();")
+  string(FIND "${_contents}" "${_frustum_entry}" _frustum_at)
+  if(_frustum_at EQUAL -1)
     continue()
   endif()
-
-  string(SUBSTRING "${_contents}" ${_frustum_anchor} 12000 _frustum_window)
-  string(REGEX MATCH
-    "\t// bl 0x[0-9a-fA-F]+\n\tctx\\.lr = 0x[0-9A-F]+;\n\tsub_[0-9A-F]+\\(ctx, base\\);"
-    _frustum_call
-    "${_frustum_window}")
-  if(_frustum_call STREQUAL "")
-    message(FATAL_ERROR "Failed to apply Skate 3 generated frustum patch; call near frustum anchor not found in ${_file}")
+  set(_frustum_planes "\n\tSkate3GuestCullPlanes cull_planes(ctx, base, ctx.r4.u32);")
+  string(FIND "${_contents}" "${_frustum_entry}${_frustum_planes}" _patched_at)
+  if(_patched_at EQUAL -1)
+    string(SUBSTRING "${_contents}" ${_frustum_at} -1 _frustum_tail)
+    string(FIND "${_frustum_tail}" "\n}\n" _frustum_end)
+    if(_frustum_end EQUAL -1)
+      message(FATAL_ERROR "Could not find end of guest frustum routine in ${_file}")
+    endif()
+    string(SUBSTRING "${_frustum_tail}" 0 ${_frustum_end} _frustum_original)
+    string(REPLACE "${_frustum_entry}" "${_frustum_entry}${_frustum_planes}"
+      _frustum_updated "${_frustum_original}")
+    # lvx128 reverses the guest bytes, so plane d is lane zero in the host vector.
+    set(_plane 0)
+    foreach(_reg IN ITEMS 62 61 60 59 58 56)
+      string(REGEX MATCH
+        "\t// lvx128 v${_reg},r4,r[0-9]+\n\tea = [^\n]+\n\tsimde_mm_store_si128[^\n]+"
+        _plane_load "${_frustum_original}")
+      if(NOT _plane_load MATCHES "ctx\\.v${_reg}\\.u8.*VectorMaskL")
+        message(FATAL_ERROR "Missing guest frustum plane v${_reg} in ${_file}")
+      endif()
+      string(REPLACE "${_plane_load}"
+        "${_plane_load}\n\tctx.v${_reg}.f32[0] = cull_planes.VrPlaneDistance(${_plane}, ctx.v${_reg}.f32[0]);"
+        _frustum_updated "${_frustum_updated}")
+      math(EXPR _plane "${_plane} + 1")
+    endforeach()
+    string(REPLACE "${_frustum_original}" "${_frustum_updated}" _contents "${_contents}")
+    _skate3_add_include(_contents "skate3_ultrawide_guest.h")
+    file(WRITE "${_file}" "${_contents}")
+    message(STATUS "Applied guest frustum plane overrides in ${_file}")
   endif()
-
-  string(REGEX REPLACE
-    "(\tctx\\.lr = 0x[0-9A-F]+;\n)"
-    "\\1\tSkate3UltrawideGameFrustumPatchScope skate3_ultrawide_game_frustum_patch_scope(\n\t\tctx, base, ctx.r4.u32);\n"
-    _frustum_patch
-    "${_frustum_call}")
-  string(REPLACE "${_frustum_call}" "${_frustum_patch}" _contents "${_contents}")
-  _skate3_add_include(_contents "skate3_ultrawide_guest.h")
-  file(WRITE "${_file}" "${_contents}")
   set(_frustum_patched TRUE)
-  message(STATUS "Applied Skate 3 generated frustum patch in ${_file}")
-  break()
 endforeach()
 if(NOT _frustum_patched)
-  message(FATAL_ERROR "Failed to apply Skate 3 generated frustum patch; frustum anchor not found")
+  message(FATAL_ERROR "Failed to apply Skate 3 generated frustum patch; sub_82816A40 not found")
 endif()
 
 set(_fov_patched FALSE)
